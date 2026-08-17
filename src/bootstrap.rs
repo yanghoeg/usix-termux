@@ -247,18 +247,27 @@ pub fn setup() -> Result<()> {
     Ok(())
 }
 
-// 예시 스킬 하나를 바이너리에 담아 배포 — 재빌드 없이 마크다운으로 능력을 늘리는 진입점.
+// 예시 스킬을 바이너리에 담아 배포 — 재빌드 없이 마크다운으로 능력을 늘리는 진입점.
 const SMS_REPLY_SKILL: &str = include_str!("../skills/sms_reply.md");
+const KAKAO_READ_SKILL: &str = include_str!("../skills/kakao_read.md");
 
-/// 예시 스킬을 ~/.usix/skills/ 에 심는다(없을 때만). 사용자가 여기서 .md 를 늘려간다.
-fn seed_skills() {
+/// 스킬 하나를 ~/.usix/skills/ 에 심는다(없을 때만).
+fn seed_skill(name: &str, body: &str) {
     let dir = crate::domain::skills::skills_dir();
-    let f = dir.join("sms_reply.md");
+    let f = dir.join(name);
     if f.exists() {
         return;
     }
-    if std::fs::create_dir_all(&dir).is_ok() && std::fs::write(&f, SMS_REPLY_SKILL).is_ok() {
+    if std::fs::create_dir_all(&dir).is_ok() && std::fs::write(&f, body).is_ok() {
         println!("seeded example skill → {}", f.display());
+    }
+}
+
+/// 예시 스킬을 심는다. UI 스킬은 도구가 있을 때(USIX_UI)만 — 없는 도구를 모델에 가르치지 않기 위해.
+fn seed_skills() {
+    seed_skill("sms_reply.md", SMS_REPLY_SKILL);
+    if std::env::var("USIX_UI").is_ok() {
+        seed_skill("kakao_read.md", KAKAO_READ_SKILL);
     }
 }
 
@@ -269,6 +278,15 @@ fn termux_bridge_ok() -> bool {
         .args(["5", "termux-battery-status"])
         .output()
         .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
+/// adb 기기 연결 점검 — `adb get-state` 가 "device" 면 연결됨(무응답 대비 timeout).
+fn adb_device_connected() -> bool {
+    Command::new("timeout")
+        .args(["5", "adb", "get-state"])
+        .output()
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim() == "device")
         .unwrap_or(false)
 }
 
@@ -292,5 +310,14 @@ pub fn doctor() -> Result<()> {
     }
     println!("{} termux-api (binary)", mark(has_cmd("termux-battery-status")));
     println!("{} Termux:API app (bridge responds)", mark(termux_bridge_ok()));
+    if std::env::var("USIX_UI").is_ok() {
+        let adb = has_cmd("adb");
+        let connected = adb && adb_device_connected();
+        println!("{} adb (android-tools)", mark(adb));
+        println!("{} adb device connected", mark(connected));
+        if !connected {
+            println!("   → 개발자 옵션 > 무선 디버깅 페어링 후: adb pair localhost:PORT / adb connect localhost:PORT");
+        }
+    }
     Ok(())
 }

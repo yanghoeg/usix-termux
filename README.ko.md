@@ -62,6 +62,7 @@ tools/
   read.rs          sms_list, call_log, battery, contacts   (ReadOnly, 자동)
   comms.rs         sms_send, call, reminder                (Mutating, 승인 필요)
   shell.rs         read_file, list_dir (ReadOnly) · shell, write_file (Mutating)
+  ui.rs            ui_dump (ReadOnly) · app_open (Mutating)  — adb, USIX_UI 옵트인
 tui.rs             인라인 ratatui 입력 박스 + 일반 stdout 스트리밍 대화록
   editor.rs        UTF-8 라인 에디터 (멀티라인·히스토리·단어 편집)
   markdown.rs      마크다운 → 스타일 라인 (heading·코드블록·리스트·inline)
@@ -167,6 +168,42 @@ approval needed: sms_send {"number":"010-1234-5678","text":"10분 늦어"}  [y/N
 | `shell`      | Mutating | `y/N`     |
 | `write_file` | Mutating | `y/N`     |
 
+실험적 폰 UI 도구 — `USIX_UI` 설정 시에만 등록(아래 참고):
+
+| 도구        | 등급     | 승인      |
+| ----------- | -------- | --------- |
+| `ui_dump`   | ReadOnly | 자동      |
+| `app_open`  | Mutating | `y/N`     |
+
+## 폰 UI 컨트롤 (실험적)
+
+`termux-api` 를 넘어, **온디바이스 adb**(안드로이드 **무선 디버깅**, 루트 불필요)로 화면을
+읽고 앱을 실행할 수 있다. 카톡·라인 등 **임의 앱을 UI 수준에서** 조종한다.
+
+셋업(1회; 기기에 따라 재부팅 후 재페어링 필요):
+
+```bash
+pkg install android-tools
+# 설정 → 개발자 옵션 → 무선 디버깅 → 페어링 코드로 기기 페어링
+adb pair localhost:PAIR_PORT       # 6자리 코드 입력
+adb connect localhost:CONNECT_PORT
+USIX_UI=1 usix-termux doctor        # adb ✅, 기기 연결 ✅
+USIX_UI=1 usix-termux               # UI 도구 등록됨
+```
+
+`USIX_UI` 를 켜면 두 도구가 추가된다: `ui_dump`(ReadOnly — `uiautomator` 로 화면 텍스트·
+요소 좌표를 읽음)와 `app_open`(Mutating — 패키지명으로 앱 실행). 번들 스킬 `kakao_read` 가
+이 둘로 카톡을 열어 화면에 보이는 대화를 요약한다.
+
+정직한 한계:
+
+- **지금은 읽기 전용.** 탭·입력(`ui_tap`/`ui_type`)은 다음 컷 — 현재는 앱을 열고 화면을
+  읽지만 답장은 보내지 못한다.
+- **보이는 것만.** adb 는 `shell` 권한이라 UI 조작·화면 읽기는 되지만 다른 앱의 **비공개
+  DB 는 못 읽는다** — 전체 대화 기록은 여전히 루팅 필요.
+- **취약함.** UI 레이아웃·좌표는 기기마다 다르고, 소형 로컬 모델은 짧은 정해진 흐름만
+  안정적으로 처리한다.
+
 ## 스킬
 
 스킬은 `~/.usix/skills/*.md`에 두는 **마크다운 절차**로, 모델에게 기존 도구를 엮는 법을
@@ -188,4 +225,4 @@ approval needed: sms_send {"number":"010-…","text":"7시까지 갈게, 사랑�
 ## 상태
 
 v0 — 백엔드 2종(llama.cpp 기본 / ollama), 읽기 도구 6종 + 변경 도구 5종(승인 게이트),
-스트리밍 마크다운 TUI. 라이선스 MIT.
+그리고 `USIX_UI` 뒤의 실험적 adb 폰 UI 도구, 스트리밍 마크다운 TUI. 라이선스 MIT.

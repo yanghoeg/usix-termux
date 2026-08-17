@@ -64,6 +64,7 @@ tools/
   read.rs          sms_list, call_log, battery, contacts   (ReadOnly, automatic)
   comms.rs         sms_send, call, reminder                (Mutating, approval required)
   shell.rs         read_file, list_dir (ReadOnly) · shell, write_file (Mutating)
+  ui.rs            ui_dump (ReadOnly) · app_open (Mutating)  — adb, opt-in USIX_UI
 tui.rs             inline ratatui input box + streamed, plain-stdout transcript
   editor.rs        UTF-8 line editor (multiline, history, word keys)
   markdown.rs      markdown → styled lines (headings, code blocks, lists, inline)
@@ -169,6 +170,45 @@ Sent to 010-1234-5678.
 | `shell`      | Mutating | `y/N`     |
 | `write_file` | Mutating | `y/N`     |
 
+Experimental phone-UI tools, registered only when `USIX_UI` is set (see below):
+
+| Tool        | Class    | Approval  |
+| ----------- | -------- | --------- |
+| `ui_dump`   | ReadOnly | automatic |
+| `app_open`  | Mutating | `y/N`     |
+
+## Phone UI control (experimental)
+
+Beyond `termux-api`, the agent can read the screen and launch apps via **on-device adb**
+over Android **wireless debugging** — no root. This drives arbitrary apps (KakaoTalk, Line,
+…) at the UI level.
+
+Setup (one-time; some devices require re-pairing after reboot):
+
+```bash
+pkg install android-tools
+# Settings → Developer options → Wireless debugging → Pair device with pairing code
+adb pair localhost:PAIR_PORT       # enter the 6-digit code
+adb connect localhost:CONNECT_PORT
+USIX_UI=1 usix-termux doctor        # adb ✅, device connected ✅
+USIX_UI=1 usix-termux               # UI tools now registered
+```
+
+When `USIX_UI` is set, two tools are added: `ui_dump` (ReadOnly — reads on-screen text and
+element coordinates via `uiautomator`) and `app_open` (Mutating — launches an app by
+package). The bundled `kakao_read` skill uses them to open KakaoTalk and summarize the
+visible chat.
+
+Honest caveats:
+
+- **Read-only for now.** Tapping/typing (`ui_tap`/`ui_type`) is a future cut; the current
+  cut opens apps and reads the screen but does not send replies.
+- **Only what's visible.** adb runs as the `shell` user, which can drive UI and read the
+  screen but **cannot** read another app's private database — full chat history still needs
+  root.
+- **Brittle.** UI layouts and coordinates vary per device; a small local model reliably
+  handles only short, scripted flows.
+
 ## Skills
 
 Skills are markdown procedures in `~/.usix/skills/*.md` that teach the model how to chain
@@ -191,4 +231,5 @@ Sent.
 ## Status
 
 v0 — two backends (llama.cpp default / ollama), six read tools + five mutating tools
-(approval-gated), streaming markdown TUI. Licensed under MIT.
+(approval-gated), plus experimental adb phone-UI tools behind `USIX_UI`, streaming markdown
+TUI. Licensed under MIT.
