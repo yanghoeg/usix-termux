@@ -239,9 +239,12 @@ and, on request, replies.
 Setup:
 
 ```bash
-# 1. Clone & build the companion APK (separate repo; needs the Android SDK)
-git clone https://github.com/yanghoeg/usix-companion && cd usix-companion
-./gradlew assembleDebug                       # or open in Android Studio
+# 1. Get the companion APK (separate repo):
+#    - recommended: download the latest app-debug.apk from
+#      https://github.com/yanghoeg/usix-companion/releases
+#    - or build it yourself (needs a local Gradle 8.10.2 + the Android SDK):
+#        git clone https://github.com/yanghoeg/usix-companion && cd usix-companion
+#        gradle assembleDebug            # or open in Android Studio
 # 2. Install it, launch once, and grant "Notification access" (the app has a button for it)
 # 3. Back in Termux:
 USIX_COMPANION=1 usix-termux doctor          # bridge 127.0.0.1:8760 ✅
@@ -255,8 +258,8 @@ Honest caveats:
   chat history — that still needs root.
 - **Same-device loopback.** The bridge binds `127.0.0.1` only; the APK must be running (the
   listener service keeps it alive) for the tools to respond.
-- **No Gradle wrapper committed.** The usix-companion repo omits the wrapper jar; build with a
-  local Gradle/Android SDK or Android Studio.
+- **No Gradle wrapper committed.** The usix-companion repo omits the wrapper jar; CI builds
+  with a pinned Gradle version, and local builds use a system `gradle` or Android Studio.
 
 ## Skills
 

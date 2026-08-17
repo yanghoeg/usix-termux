@@ -231,9 +231,12 @@ adb 경로와 달리 이건 **실제로 답장이 된다** — (앱 UI가 아니
 셋업:
 
 ```bash
-# 1. 컴패니언 APK 클론 & 빌드 (별도 repo; Android SDK 필요)
-git clone https://github.com/yanghoeg/usix-companion && cd usix-companion
-./gradlew assembleDebug                       # 또는 Android Studio 로 열기
+# 1. 컴패니언 APK 받기 (별도 repo):
+#    - 권장: 최신 app-debug.apk 를 Releases 에서 다운로드
+#      https://github.com/yanghoeg/usix-companion/releases
+#    - 또는 직접 빌드 (로컬 Gradle 8.10.2 + Android SDK 필요):
+#        git clone https://github.com/yanghoeg/usix-companion && cd usix-companion
+#        gradle assembleDebug            # 또는 Android Studio 로 열기
 # 2. 설치 후 한 번 실행하고 "알림 접근" 권한 부여(앱에 버튼 있음)
 # 3. Termux 로 돌아와서:
 USIX_COMPANION=1 usix-termux doctor          # 브리지 127.0.0.1:8760 ✅
@@ -246,8 +249,8 @@ USIX_COMPANION=1 usix-termux                 # notif_list / notif_reply 등록�
   붙인 경우(`canReply`)에만 답장할 수 있다. 전체 대화 기록은 여전히 루트 필요.
 - **같은 기기 루프백.** 브리지는 `127.0.0.1`에만 바인딩하고, 도구가 응답하려면 APK가 실행
   중이어야 한다(리스너 서비스가 살려 둔다).
-- **Gradle 래퍼 미커밋.** usix-companion repo는 래퍼 jar를 넣지 않았다 — 로컬 Gradle/Android
-  SDK 또는 Android Studio 로 빌드한다.
+- **Gradle 래퍼 미커밋.** usix-companion repo는 래퍼 jar를 넣지 않았다 — CI는 고정된 Gradle
+  버전으로 빌드하고, 로컬 빌드는 시스템 `gradle` 또는 Android Studio 를 쓴다.
 
 ## 스킬
 
