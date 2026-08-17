@@ -35,9 +35,24 @@ impl Tool for SmsSend {
     fn run(&self, args: &Value) -> Result<String> {
         let number = required_str(args, "number")?;
         let text = required_str(args, "text")?;
+        if !is_phone_number(number) {
+            return Err(anyhow!(
+                "'{number}' 은 전화번호가 아니다. 지어내지 말고 contacts 도구로 이름을 조회해 실제 번호를 찾은 뒤 다시 호출하라. 없으면 사용자에게 번호를 물어라."
+            ));
+        }
         termux::run("termux-sms-send", &["-n", number, text])?;
         Ok(format!("문자 발송 완료 → {number}"))
     }
+}
+
+/// 전화번호 형식 가드 — 숫자/`+`/구분자(`- () 공백`)만 허용하고 숫자 3자리 이상.
+/// 모델이 "부인의 전화번호" 같은 문구를 번호 자리에 넣어 오발송하는 것을 막는다.
+fn is_phone_number(s: &str) -> bool {
+    let digits = s.chars().filter(|c| c.is_ascii_digit()).count();
+    let ok_chars = s
+        .chars()
+        .all(|c| c.is_ascii_digit() || matches!(c, '+' | '-' | '(' | ')' | ' '));
+    digits >= 3 && ok_chars
 }
 
 pub struct Reminder;
@@ -111,5 +126,18 @@ impl Tool for Call {
         let number = required_str(args, "number")?;
         termux::run("termux-telephony-call", &[number])?;
         Ok(format!("전화 발신 → {number}"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_phone_number;
+
+    #[test]
+    fn rejects_non_numbers_accepts_numbers() {
+        assert!(!is_phone_number("부인의 전화번호"));
+        assert!(!is_phone_number(""));
+        assert!(is_phone_number("01012345678"));
+        assert!(is_phone_number("+82 10-1234-5678"));
     }
 }

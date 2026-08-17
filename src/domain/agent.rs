@@ -10,6 +10,9 @@ use std::collections::VecDeque;
 const SYSTEM_PROMPT: &str = "너는 안드로이드 Termux 폰 비서다. \
 필요하면 제공된 도구를 호출해 실제 폰 정보를 조회하거나 작업한다. \
 문자 발송·전화 걸기 같은 변경 작업은 반드시 도구로만 수행한다. \
+전화번호를 모르면 절대 임의로 지어내지 말고 contacts 도구로 이름을 조회해 번호를 찾는다. \
+조회해도 없으면 번호를 추측하지 말고 사용자에게 번호를 물어본다. \
+사용자가 준 메시지 문구는 그대로 보낸다(이름으로 오해해 문장을 새로 짓지 않는다). \
 도구 결과를 바탕으로 한국어로 간결하게 답한다.";
 
 // 도구 호출 폭주 방지 (모델이 무한 호출하는 경우 차단).
@@ -64,10 +67,11 @@ impl<'a> Agent<'a> {
             // 1) 대기 중인 도구 호출을 먼저 소진.
             while let Some(call) = self.pending.front().cloned() {
                 let (name, args) = parse_call(&call);
+                let id = call_id(&call);
                 match self.registry.get(&name) {
                     None => {
                         self.pending.pop_front();
-                        self.push_tool_result(format!("알 수 없는 도구: {name}"));
+                        self.push_tool_result(&id, format!("알 수 없는 도구: {name}"));
                     }
                     Some(t) if t.approval() == ApprovalClass::Mutating => {
                         // 승인 대기로 넘기고 UI에 알림.
@@ -80,11 +84,14 @@ impl<'a> Agent<'a> {
                     Some(t) => {
                         let result = t.run(&args).unwrap_or_else(|e| format!("도구 오류: {e}"));
                         self.pending.pop_front();
-                        self.push_tool_result(if result.is_empty() {
-                            "(완료)".into()
-                        } else {
-                            result
-                        });
+                        self.push_tool_result(
+                            &id,
+                            if result.is_empty() {
+                                "(완료)".into()
+                            } else {
+                                result
+                            },
+                        );
                     }
                 }
             }
@@ -96,9 +103,13 @@ impl<'a> Agent<'a> {
             }
 
             // 3) 모델 호출 (최종 답변은 sink 로 스트리밍).
-            let msg = self
+            let mut msg = self
                 .llm
                 .chat_stream(&self.messages, &self.tools_schema, sink)?;
+            // 백엔드가 tool_call id 를 안 주면(ollama 등) 여기서 채운다 — 없으면 취소·결과
+            // 응답의 tool_call_id 가 어긋나 대화가 깨진다. assistant 메시지로 저장하기 전에
+            // 손봐서 저장본과 pending 이 같은 id 를 갖게 한다.
+            ensure_call_ids(&mut msg, self.messages.len());
             self.messages.push(msg.clone());
 
             let calls = msg
@@ -123,26 +134,34 @@ impl<'a> Agent<'a> {
     pub fn approve(&mut self, yes: bool) -> Result<()> {
         if let Some(call) = self.awaiting.take() {
             let (name, args) = parse_call(&call);
+            let id = call_id(&call);
             let result = if yes {
                 match self.registry.get(&name) {
                     Some(t) => t.run(&args).unwrap_or_else(|e| format!("도구 오류: {e}")),
                     None => format!("알 수 없는 도구: {name}"),
                 }
             } else {
-                "사용자가 취소함".into()
+                // 취소는 '실패'가 아니다 — 소형 모델이 자기 오류로 오해해 사과·재시도·헛소리로
+                // 대화가 흐트러지던 문제를 막으려 결과를 명확한 지시문으로 준다.
+                "사용자가 이 작업을 취소했다. 도구는 실행되지 않았다. \
+                 재시도하지 말고, 취소됐다는 것만 한국어로 짧게 알린 뒤 다음 지시를 기다려라."
+                    .into()
             };
-            self.push_tool_result(if result.is_empty() {
-                "(완료)".into()
-            } else {
-                result
-            });
+            self.push_tool_result(
+                &id,
+                if result.is_empty() {
+                    "(완료)".into()
+                } else {
+                    result
+                },
+            );
         }
         Ok(())
     }
 
-    fn push_tool_result(&mut self, content: String) {
+    fn push_tool_result(&mut self, id: &str, content: String) {
         self.messages
-            .push(json!({ "role": "tool", "content": content }));
+            .push(json!({ "role": "tool", "tool_call_id": id, "content": content }));
     }
 }
 
@@ -160,4 +179,54 @@ fn parse_call(call: &Value) -> (String, Value) {
         None => json!({}),
     };
     (name, args)
+}
+
+/// tool_call 의 id — tool 결과 메시지의 `tool_call_id` 로 되짚어 OpenAI 템플릿 짝을 맞춘다.
+/// (id 가 없으면 assistant tool_calls 와 tool 응답이 어긋나 취소 후 대화가 깨진다.)
+fn call_id(call: &Value) -> String {
+    call.get("id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string()
+}
+
+/// tool_call 에 빠진/빈 id 를 채운다(ollama 처럼 id 없는 백엔드 대비). turn 은 현 대화 길이라
+/// 턴마다 달라져 `call_{turn}_{idx}` 가 대화 전체에서 유일해진다. id 가 이미 있으면 건드리지 않는다.
+fn ensure_call_ids(msg: &mut Value, turn: usize) {
+    let Some(calls) = msg.get_mut("tool_calls").and_then(|v| v.as_array_mut()) else {
+        return;
+    };
+    for (idx, call) in calls.iter_mut().enumerate() {
+        let empty = call
+            .get("id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .is_empty();
+        if empty {
+            call["id"] = json!(format!("call_{turn}_{idx}"));
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ensure_call_ids;
+    use serde_json::json;
+
+    #[test]
+    fn fills_missing_ids_keeps_existing() {
+        let mut msg = json!({
+            "role": "assistant",
+            "tool_calls": [
+                { "id": "", "function": { "name": "a" } },
+                { "id": "keep", "function": { "name": "b" } },
+                { "function": { "name": "c" } }
+            ]
+        });
+        ensure_call_ids(&mut msg, 5);
+        let calls = msg["tool_calls"].as_array().unwrap();
+        assert_eq!(calls[0]["id"], "call_5_0");
+        assert_eq!(calls[1]["id"], "keep");
+        assert_eq!(calls[2]["id"], "call_5_2");
+    }
 }
