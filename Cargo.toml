@@ -1,0 +1,24 @@
+[package]
+name = "usix-termux"
+version = "0.0.1"
+edition = "2021"
+description = "Termux 폰 에이전트 — 로컬 ollama function-calling + termux-api 도구"
+license = "MIT"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow = "1"
+# localhost ollama만 호출하므로 TLS 비활성 → 폰 빌드 경량화
+ureq = { version = "2", default-features = false, features = ["json"] }
+# TUI — usix와 동일 스택
+crossterm = "0.28"
+ratatui = { version = "0.29", default-features = false, features = ["crossterm"] }
+# 커서 위치·wrap 의 CJK(2셀) 폭 정확 계산 — usix draw.rs 와 동일 근거
+unicode-width = "0.2"
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+strip = true

@@ -1,0 +1,10 @@
+# Rust build artifacts
+/target
+
+# Local models (GGUF are large — never commit)
+/models
+*.gguf
+
+# Editor / OS cruft
+*.swp
+.DS_Store
