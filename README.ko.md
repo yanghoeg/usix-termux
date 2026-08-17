@@ -59,8 +59,9 @@ domain/
   agent.rs         function-calling 루프 + 승인 게이트
   skills.rs        마크다운 스킬 로더 (~/.usix/skills/*.md → 시스템 프롬프트)
 tools/
-  read.rs          sms_list, call_log, battery   (ReadOnly, 자동)
-  comms.rs         sms_send, call                (Mutating, 승인 필요)
+  read.rs          sms_list, call_log, battery, contacts   (ReadOnly, 자동)
+  comms.rs         sms_send, call, reminder                (Mutating, 승인 필요)
+  shell.rs         read_file, list_dir (ReadOnly) · shell, write_file (Mutating)
 tui.rs             인라인 ratatui 입력 박스 + 일반 stdout 스트리밍 대화록
   editor.rs        UTF-8 라인 에디터 (멀티라인·히스토리·단어 편집)
   markdown.rs      마크다운 → 스타일 라인 (heading·코드블록·리스트·inline)
@@ -157,8 +158,14 @@ approval needed: sms_send {"number":"010-1234-5678","text":"10분 늦어"}  [y/N
 | `sms_list` | ReadOnly | 자동      |
 | `call_log` | ReadOnly | 자동      |
 | `battery`  | ReadOnly | 자동      |
-| `sms_send` | Mutating | `y/N`     |
-| `call`     | Mutating | `y/N`     |
+| `contacts`   | ReadOnly | 자동      |
+| `read_file`  | ReadOnly | 자동      |
+| `list_dir`   | ReadOnly | 자동      |
+| `sms_send`   | Mutating | `y/N`     |
+| `call`       | Mutating | `y/N`     |
+| `reminder`   | Mutating | `y/N`     |
+| `shell`      | Mutating | `y/N`     |
+| `write_file` | Mutating | `y/N`     |
 
 ## 스킬
 
@@ -180,5 +187,5 @@ approval needed: sms_send {"number":"010-…","text":"7시까지 갈게, 사랑�
 
 ## 상태
 
-v0 — 백엔드 2종(llama.cpp 기본 / ollama), 읽기 도구 3종 + 변경 도구 2종(승인 게이트),
+v0 — 백엔드 2종(llama.cpp 기본 / ollama), 읽기 도구 6종 + 변경 도구 5종(승인 게이트),
 스트리밍 마크다운 TUI. 라이선스 MIT.

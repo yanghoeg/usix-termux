@@ -54,6 +54,47 @@ impl Tool for CallLog {
     }
 }
 
+pub struct Contacts;
+impl Tool for Contacts {
+    fn name(&self) -> &str {
+        "contacts"
+    }
+    fn description(&self) -> &str {
+        "저장된 연락처(이름↔전화번호)를 조회한다. 이름으로 문자·전화할 때 번호를 찾는 데 쓴다."
+    }
+    fn parameters(&self) -> Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "name": { "type": "string", "description": "이름 일부로 거를 검색어 (생략 시 전체)" }
+            }
+        })
+    }
+    fn approval(&self) -> ApprovalClass {
+        ApprovalClass::ReadOnly
+    }
+    fn run(&self, args: &Value) -> Result<String> {
+        let raw = termux::run("termux-contact-list", &[])?;
+        let Some(query) = args.get("name").and_then(|v| v.as_str()) else {
+            return Ok(raw);
+        };
+        let query = query.to_lowercase();
+        // 연락처가 많으면 소형 모델 컨텍스트를 아끼려 이름으로 걸러 준다.
+        let Ok(Value::Array(all)) = serde_json::from_str::<Value>(&raw) else {
+            return Ok(raw);
+        };
+        let hits: Vec<Value> = all
+            .into_iter()
+            .filter(|c| {
+                c.get("name")
+                    .and_then(|v| v.as_str())
+                    .is_some_and(|n| n.to_lowercase().contains(&query))
+            })
+            .collect();
+        Ok(serde_json::to_string(&hits)?)
+    }
+}
+
 pub struct Battery;
 impl Tool for Battery {
     fn name(&self) -> &str {

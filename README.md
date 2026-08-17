@@ -61,8 +61,9 @@ domain/
   agent.rs         function-calling loop + approval gate
   skills.rs        markdown skill loader (~/.usix/skills/*.md → system prompt)
 tools/
-  read.rs          sms_list, call_log, battery   (ReadOnly, automatic)
-  comms.rs         sms_send, call                (Mutating, approval required)
+  read.rs          sms_list, call_log, battery, contacts   (ReadOnly, automatic)
+  comms.rs         sms_send, call, reminder                (Mutating, approval required)
+  shell.rs         read_file, list_dir (ReadOnly) · shell, write_file (Mutating)
 tui.rs             inline ratatui input box + streamed, plain-stdout transcript
   editor.rs        UTF-8 line editor (multiline, history, word keys)
   markdown.rs      markdown → styled lines (headings, code blocks, lists, inline)
@@ -159,8 +160,14 @@ Sent to 010-1234-5678.
 | `sms_list` | ReadOnly | automatic |
 | `call_log` | ReadOnly | automatic |
 | `battery`  | ReadOnly | automatic |
-| `sms_send` | Mutating | `y/N`     |
-| `call`     | Mutating | `y/N`     |
+| `contacts`   | ReadOnly | automatic |
+| `read_file`  | ReadOnly | automatic |
+| `list_dir`   | ReadOnly | automatic |
+| `sms_send`   | Mutating | `y/N`     |
+| `call`       | Mutating | `y/N`     |
+| `reminder`   | Mutating | `y/N`     |
+| `shell`      | Mutating | `y/N`     |
+| `write_file` | Mutating | `y/N`     |
 
 ## Skills
 
@@ -183,5 +190,5 @@ Sent.
 
 ## Status
 
-v0 — two backends (llama.cpp default / ollama), three read tools + two mutating tools
+v0 — two backends (llama.cpp default / ollama), six read tools + five mutating tools
 (approval-gated), streaming markdown TUI. Licensed under MIT.
