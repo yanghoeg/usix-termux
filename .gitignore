@@ -8,3 +8,6 @@
 # Editor / OS cruft
 *.swp
 .DS_Store
+
+# Local Claude Code instructions
+CLAUDE.md
