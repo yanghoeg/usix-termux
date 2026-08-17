@@ -13,6 +13,31 @@ interpretation and tool selection. **Mutating actions** (sending an SMS, placing
 
 Answers stream token-by-token, one line at a time.
 
+## Demo
+
+<!-- Record on device and drop the GIF here: ![demo](docs/demo.gif) -->
+
+```text
+> summarize my recent texts and reply to mom that I'll be home by 7
+Thinking… (2s)
+3 new — mom: "did you eat?", bank OTP, courier ETA 6pm.
+Draft to mom (010-…): "Home by 7 — love you"
+approval needed: sms_send {"number":"010-…","text":"Home by 7 — love you"}  [y/N] y
+Sent.
+```
+
+## Quick start
+
+```bash
+pkg install rust git
+git clone https://github.com/yanghoeg/usix-termux && cd usix-termux
+cargo build --release && ./target/release/usix-termux setup
+```
+
+One `setup` installs the backend, downloads the model, starts the server, and seeds the
+example skill. Phone tools also need the **Termux:API app** (F-Droid) — see
+[Prerequisites](#prerequisites).
+
 ## Features
 
 - 🧠 **Local LLM**, no cloud — llama.cpp (`llama-server`, OpenAI-compatible) or ollama

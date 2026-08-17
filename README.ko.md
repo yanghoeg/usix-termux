@@ -12,6 +12,30 @@
 
 답변은 토큰 단위로, 한 줄씩 스트리밍된다.
 
+## 데모
+
+<!-- 폰에서 녹화해 GIF 삽입: ![demo](docs/demo.gif) -->
+
+```text
+> 최근 문자 요약하고 엄마한테 7시까지 간다고 답장해줘
+Thinking… (2s)
+새 문자 3건 — 엄마: "밥 먹었어?", 은행 OTP, 택배 6시 도착.
+엄마(010-…)에게 초안: "7시까지 갈게 — 사랑해"
+approval needed: sms_send {"number":"010-…","text":"7시까지 갈게 — 사랑해"}  [y/N] y
+발송 완료.
+```
+
+## 빠른 시작
+
+```bash
+pkg install rust git
+git clone https://github.com/yanghoeg/usix-termux && cd usix-termux
+cargo build --release && ./target/release/usix-termux setup
+```
+
+`setup` 한 번으로 백엔드 설치·모델 다운로드·서버 기동·예시 스킬 심기까지 끝난다.
+폰 도구엔 여전히 **Termux:API 앱**(F-Droid)이 필요하다 — [전제](#전제) 참고.
+
 ## 특징
 
 - 🧠 **로컬 LLM**, 클라우드 없음 — llama.cpp(`llama-server`, OpenAI 호환) 또는 ollama
