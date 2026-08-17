@@ -65,12 +65,15 @@ tools/
   comms.rs         sms_send, call, reminder                (Mutating, approval required)
   shell.rs         read_file, list_dir (ReadOnly) · shell, write_file (Mutating)
   ui.rs            ui_dump (ReadOnly) · app_open (Mutating)  — adb, opt-in USIX_UI
+  companion.rs     notif_list (ReadOnly) · notif_reply (Mutating) — bridge, opt-in USIX_COMPANION
 tui.rs             inline ratatui input box + streamed, plain-stdout transcript
   editor.rs        UTF-8 line editor (multiline, history, word keys)
   markdown.rs      markdown → styled lines (headings, code blocks, lists, inline)
 skills/
   sms_reply.md     example skill (summarize recent SMS + draft a reply)
 ```
+
+The Android companion app lives in a **separate repo** ([usix-companion](https://github.com/yanghoeg/usix-companion)) — see "Companion app" below.
 
 ## Prerequisites
 
@@ -177,6 +180,13 @@ Experimental phone-UI tools, registered only when `USIX_UI` is set (see below):
 | `ui_dump`   | ReadOnly | automatic |
 | `app_open`  | Mutating | `y/N`     |
 
+Companion notification tools, registered only when `USIX_COMPANION` is set (see below):
+
+| Tool          | Class    | Approval  |
+| ------------- | -------- | --------- |
+| `notif_list`  | ReadOnly | automatic |
+| `notif_reply` | Mutating | `y/N`     |
+
 ## Phone UI control (experimental)
 
 Beyond `termux-api`, the agent can read the screen and launch apps via **on-device adb**
@@ -208,6 +218,45 @@ Honest caveats:
   root.
 - **Brittle.** UI layouts and coordinates vary per device; a small local model reliably
   handles only short, scripted flows.
+
+## Companion app — notifications & reply (experimental)
+
+adb reads the *screen* but can't read another app's notifications or fire an inline reply.
+The separate **[usix-companion](https://github.com/yanghoeg/usix-companion)** app (a tiny
+Kotlin `NotificationListenerService`) does both, with **no
+root and no adb**: it captures incoming notifications (KakaoTalk, Line, …) and can send an
+app's inline **RemoteInput** reply. It exposes a loopback-only HTTP bridge on
+`127.0.0.1:8760`, which the Termux agent drives via two tools:
+
+- `notif_list` (ReadOnly) — recent notifications (`pkg`, `title`, `text`, `key`, `canReply`)
+- `notif_reply` (Mutating, `y/N`) — send an inline reply to a notification `key`
+
+Unlike the adb path, this **can actually reply** — it's the first cut that closes the
+KakaoTalk read→reply loop (via notifications, not the app UI). Registered only when
+`USIX_COMPANION` is set. The bundled `kakao_notify` skill summarizes KakaoTalk notifications
+and, on request, replies.
+
+Setup:
+
+```bash
+# 1. Clone & build the companion APK (separate repo; needs the Android SDK)
+git clone https://github.com/yanghoeg/usix-companion && cd usix-companion
+./gradlew assembleDebug                       # or open in Android Studio
+# 2. Install it, launch once, and grant "Notification access" (the app has a button for it)
+# 3. Back in Termux:
+USIX_COMPANION=1 usix-termux doctor          # bridge 127.0.0.1:8760 ✅
+USIX_COMPANION=1 usix-termux                 # notif_list / notif_reply now registered
+```
+
+Honest caveats:
+
+- **Notifications only.** It sees what a notification carries (sender + latest line) and can
+  reply *only* if the app attached a RemoteInput action (`canReply`). It cannot read full
+  chat history — that still needs root.
+- **Same-device loopback.** The bridge binds `127.0.0.1` only; the APK must be running (the
+  listener service keeps it alive) for the tools to respond.
+- **No Gradle wrapper committed.** The usix-companion repo omits the wrapper jar; build with a
+  local Gradle/Android SDK or Android Studio.
 
 ## Skills
 

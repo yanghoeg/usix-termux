@@ -63,12 +63,15 @@ tools/
   comms.rs         sms_send, call, reminder                (Mutating, 승인 필요)
   shell.rs         read_file, list_dir (ReadOnly) · shell, write_file (Mutating)
   ui.rs            ui_dump (ReadOnly) · app_open (Mutating)  — adb, USIX_UI 옵트인
+  companion.rs     notif_list (ReadOnly) · notif_reply (Mutating) — 알림 브리지, USIX_COMPANION 옵트인
 tui.rs             인라인 ratatui 입력 박스 + 일반 stdout 스트리밍 대화록
   editor.rs        UTF-8 라인 에디터 (멀티라인·히스토리·단어 편집)
   markdown.rs      마크다운 → 스타일 라인 (heading·코드블록·리스트·inline)
 skills/
   sms_reply.md     예시 스킬 (최근 문자 요약 + 답장 작성)
 ```
+
+안드로이드 컴패니언 앱은 **별도 repo**([usix-companion](https://github.com/yanghoeg/usix-companion))에 있다 — 아래 "컴패니언 앱" 참고.
 
 ## 전제
 
@@ -175,6 +178,13 @@ approval needed: sms_send {"number":"010-1234-5678","text":"10분 늦어"}  [y/N
 | `ui_dump`   | ReadOnly | 자동      |
 | `app_open`  | Mutating | `y/N`     |
 
+컴패니언 알림 도구 — `USIX_COMPANION` 설정 시에만 등록(아래 참고):
+
+| 도구          | 등급     | 승인      |
+| ------------- | -------- | --------- |
+| `notif_list`  | ReadOnly | 자동      |
+| `notif_reply` | Mutating | `y/N`     |
+
 ## 폰 UI 컨트롤 (실험적)
 
 `termux-api` 를 넘어, **온디바이스 adb**(안드로이드 **무선 디버깅**, 루트 불필요)로 화면을
@@ -203,6 +213,41 @@ USIX_UI=1 usix-termux               # UI 도구 등록됨
   DB 는 못 읽는다** — 전체 대화 기록은 여전히 루팅 필요.
 - **취약함.** UI 레이아웃·좌표는 기기마다 다르고, 소형 로컬 모델은 짧은 정해진 흐름만
   안정적으로 처리한다.
+
+## 컴패니언 앱 — 알림 & 답장 (실험적)
+
+adb는 *화면*을 읽지만 다른 앱의 알림을 읽거나 인라인 답장을 쏘진 못한다.
+별도 [usix-companion](https://github.com/yanghoeg/usix-companion) 앱(작은 Kotlin `NotificationListenerService`)이 그 둘을 **루트·adb 없이** 해낸다: 들어오는
+알림(카톡·라인 등)을 잡고, 앱이 제공하는 인라인 **RemoteInput** 답장을 보낸다. 루프백 전용
+HTTP 브리지를 `127.0.0.1:8760`에 열고, Termux 에이전트가 두 도구로 이를 부린다:
+
+- `notif_list` (ReadOnly) — 최근 알림(`pkg`·`title`·`text`·`key`·`canReply`)
+- `notif_reply` (Mutating, `y/N`) — 알림 `key`에 인라인 답장
+
+adb 경로와 달리 이건 **실제로 답장이 된다** — (앱 UI가 아니라 알림을 통해) 카톡 읽기→답장
+루프를 처음으로 닫는 컷이다. `USIX_COMPANION` 설정 시에만 등록된다. 번들 스킬 `kakao_notify`가
+카톡 알림을 요약하고, 원하면 답장한다.
+
+셋업:
+
+```bash
+# 1. 컴패니언 APK 클론 & 빌드 (별도 repo; Android SDK 필요)
+git clone https://github.com/yanghoeg/usix-companion && cd usix-companion
+./gradlew assembleDebug                       # 또는 Android Studio 로 열기
+# 2. 설치 후 한 번 실행하고 "알림 접근" 권한 부여(앱에 버튼 있음)
+# 3. Termux 로 돌아와서:
+USIX_COMPANION=1 usix-termux doctor          # 브리지 127.0.0.1:8760 ✅
+USIX_COMPANION=1 usix-termux                 # notif_list / notif_reply 등록됨
+```
+
+정직한 한계:
+
+- **알림만.** 알림에 실린 것(보낸 사람 + 최신 한 줄)만 보고, 앱이 RemoteInput 답장 액션을
+  붙인 경우(`canReply`)에만 답장할 수 있다. 전체 대화 기록은 여전히 루트 필요.
+- **같은 기기 루프백.** 브리지는 `127.0.0.1`에만 바인딩하고, 도구가 응답하려면 APK가 실행
+  중이어야 한다(리스너 서비스가 살려 둔다).
+- **Gradle 래퍼 미커밋.** usix-companion repo는 래퍼 jar를 넣지 않았다 — 로컬 Gradle/Android
+  SDK 또는 Android Studio 로 빌드한다.
 
 ## 스킬
 

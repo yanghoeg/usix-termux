@@ -250,6 +250,7 @@ pub fn setup() -> Result<()> {
 // 예시 스킬을 바이너리에 담아 배포 — 재빌드 없이 마크다운으로 능력을 늘리는 진입점.
 const SMS_REPLY_SKILL: &str = include_str!("../skills/sms_reply.md");
 const KAKAO_READ_SKILL: &str = include_str!("../skills/kakao_read.md");
+const KAKAO_NOTIFY_SKILL: &str = include_str!("../skills/kakao_notify.md");
 
 /// 스킬 하나를 ~/.usix/skills/ 에 심는다(없을 때만).
 fn seed_skill(name: &str, body: &str) {
@@ -268,6 +269,9 @@ fn seed_skills() {
     seed_skill("sms_reply.md", SMS_REPLY_SKILL);
     if std::env::var("USIX_UI").is_ok() {
         seed_skill("kakao_read.md", KAKAO_READ_SKILL);
+    }
+    if std::env::var("USIX_COMPANION").is_ok() {
+        seed_skill("kakao_notify.md", KAKAO_NOTIFY_SKILL);
     }
 }
 
@@ -288,6 +292,11 @@ fn adb_device_connected() -> bool {
         .output()
         .map(|o| String::from_utf8_lossy(&o.stdout).trim() == "device")
         .unwrap_or(false)
+}
+
+/// 컴패니언 알림 브리지 점검 — 127.0.0.1:8760/health 가 응답하면 앱이 살아 있는 것.
+fn companion_bridge_ok() -> bool {
+    ureq::get("http://127.0.0.1:8760/health").call().is_ok()
 }
 
 /// doctor — prerequisite checks (per backend).
@@ -317,6 +326,13 @@ pub fn doctor() -> Result<()> {
         println!("{} adb device connected", mark(connected));
         if !connected {
             println!("   → 개발자 옵션 > 무선 디버깅 페어링 후: adb pair localhost:PORT / adb connect localhost:PORT");
+        }
+    }
+    if std::env::var("USIX_COMPANION").is_ok() {
+        let ok = companion_bridge_ok();
+        println!("{} usix-companion 알림 브리지 (127.0.0.1:8760)", mark(ok));
+        if !ok {
+            println!("   → companion/ 앱 설치 후 실행하고 '알림 접근' 권한을 켜세요.");
         }
     }
     Ok(())

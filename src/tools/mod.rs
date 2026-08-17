@@ -1,4 +1,5 @@
 pub mod comms;
+pub mod companion;
 pub mod read;
 pub mod shell;
 pub mod ui;
@@ -24,6 +25,11 @@ pub fn default_tools() -> Vec<Box<dyn Tool>> {
     if std::env::var("USIX_UI").is_ok() {
         tools.push(Box::new(ui::Screen));
         tools.push(Box::new(ui::AppOpen));
+    }
+    // 알림 브리지(컴패니언 앱) — 카톡·라인 알림 읽기/인라인 답장. USIX_COMPANION 설정 시에만.
+    if std::env::var("USIX_COMPANION").is_ok() {
+        tools.push(Box::new(companion::NotifList));
+        tools.push(Box::new(companion::NotifReply));
     }
     tools
 }
