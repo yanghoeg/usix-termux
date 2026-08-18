@@ -72,18 +72,30 @@ fn parse(text: &str) -> Option<Skill> {
     })
 }
 
-/// 요청과 관련된 스킬만 고른다 — 소형 모델은 무관한 스킬 지침이 끼면 후속 절차를
-/// 놓친다(빈 응답). 요청 토큰이 스킬 name/description/body에 하나라도 걸리면 채택.
-pub fn select<'a>(skills: &'a [Skill], query: &str) -> Vec<&'a Skill> {
-    let q = query.to_lowercase();
-    let tokens: Vec<&str> = q
+/// 2글자 이상 알파넘 토큰으로 쪼갠다.
+fn tokenize(s: &str) -> Vec<String> {
+    s.to_lowercase()
         .split(|c: char| !c.is_alphanumeric())
         .filter(|t| t.chars().count() >= 2)
-        .collect();
+        .map(|t| t.to_string())
+        .collect()
+}
+
+/// 요청과 관련된 스킬만 고른다 — 소형 모델은 무관한 스킬 지침이 끼면 후속 절차를
+/// 놓친다(빈 응답). 요청 토큰과 스킬 토큰이 어느 방향으로든 포함되면 채택한다. 양방향
+/// 비교라 한국어 조사("카톡에"→"카톡")로 어미가 붙어도 스킬 키워드에 걸린다.
+pub fn select<'a>(skills: &'a [Skill], query: &str) -> Vec<&'a Skill> {
+    let q_tokens = tokenize(query);
     let mut out = Vec::new();
     for sk in skills {
-        let hay = format!("{} {} {}", sk.name, sk.description, sk.body).to_lowercase();
-        if tokens.iter().any(|t| hay.contains(t)) {
+        let hay = format!("{} {} {}", sk.name, sk.description, sk.body);
+        let s_tokens = tokenize(&hay);
+        let hit = q_tokens.iter().any(|qt| {
+            s_tokens
+                .iter()
+                .any(|st| st.contains(qt.as_str()) || qt.contains(st.as_str()))
+        });
+        if hit {
             out.push(sk);
             if out.len() >= MAX_ACTIVE {
                 break;
@@ -150,5 +162,10 @@ mod tests {
 
         // 무관한 요청이면 아무 스킬도 얹지 않는다.
         assert!(select(&skills, "배터리 몇 퍼야").is_empty());
+
+        // 조사가 붙어 "카톡에"로 와도 스킬 키워드 "카톡"에 걸려야 한다.
+        let hit = select(&skills, "카톡에 뭐보여?");
+        assert_eq!(hit.len(), 1);
+        assert_eq!(hit[0].name, "kakao_notify");
     }
 }
