@@ -57,16 +57,30 @@ impl Tool for Screen {
         "ui_dump"
     }
     fn description(&self) -> &str {
-        "현재 폰 화면에 보이는 텍스트·버튼과 위치(x,y)를 읽는다. 화면 내용을 파악하거나 누를 위치를 찾을 때 쓴다."
+        "현재 폰 화면에 보이는 텍스트·버튼과 위치(x,y)를 읽는다. 화면 내용을 파악하거나 누를 위치를 찾을 때 쓴다. 특정 앱을 읽으려면 package 를 준다(멀티윈도에서 정확)."
     }
     fn parameters(&self) -> Value {
-        json!({ "type": "object", "properties": {} })
+        json!({
+            "type": "object",
+            "properties": {
+                "package": { "type": "string", "description": "읽을 앱 패키지명 (예: com.kakao.talk). 생략 시 최상위 앱 창." }
+            }
+        })
     }
     fn approval(&self) -> ApprovalClass {
         ApprovalClass::ReadOnly
     }
-    fn run(&self, _args: &Value) -> Result<String> {
-        let body = bridge_get("/screen")?;
+    fn run(&self, args: &Value) -> Result<String> {
+        let path = match args.get("package").and_then(|v| v.as_str()) {
+            Some(pkg) if !pkg.is_empty() => {
+                if !pkg.chars().all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '_') {
+                    return Err(anyhow!("잘못된 패키지명: {pkg}"));
+                }
+                format!("/screen?package={pkg}")
+            }
+            _ => "/screen".to_string(),
+        };
+        let body = bridge_get(&path)?;
         let Value::Array(items) = body else {
             return Ok("(화면에서 읽을 요소 없음)".into());
         };
