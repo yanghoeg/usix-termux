@@ -131,10 +131,29 @@ impl<'a> Agent<'a> {
                     .and_then(|v| v.as_str())
                     .unwrap_or("")
                     .to_string();
+                if content.is_empty() {
+                    // Hammer 등 일부 3B 는 도구가 필요 없을 때 답변 대신 빈 도구배열("[]")
+                    // 노이즈를 낸다 → content 가 비어 빈 답이 나간다. 도구 없이 한 번 더
+                    // 물어 자연어 답을 받는다.
+                    return Ok(Turn::Answer(self.answer_without_tools(sink)?));
+                }
                 return Ok(Turn::Answer(content));
             }
             self.pending.extend(calls);
         }
+    }
+
+    /// 방금 저장한 빈 assistant 응답을 걷어내고, 도구 스키마 없이 다시 물어 자연어 답을 받는다.
+    fn answer_without_tools(&mut self, sink: &mut dyn FnMut(&str)) -> Result<String> {
+        self.messages.pop();
+        let msg = self.llm.chat_stream(&self.messages, &[], sink)?;
+        let content = msg
+            .get("content")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        self.messages.push(msg);
+        Ok(content)
     }
 
     /// 승인 대기 중인 변경 도구를 실행하거나 취소한다.
