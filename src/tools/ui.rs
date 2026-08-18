@@ -1,5 +1,5 @@
 // TOOLS — 폰 UI 컨트롤(실험적). usix-companion 앱의 접근성 서비스를 통해 루트·adb 없이 화면을 읽고
-// 탭·입력한다. 8760 브리지의 /screen·/tap·/type·/back·/open 을 친다. USIX_UI 설정 시에만 등록된다.
+// 탭·입력한다. 8760 브리지의 /screen·/tap·/type·/back·/open 을 친다. 기본 등록된다.
 // 읽기(ui_dump)는 자동, 나머지(탭·입력·앱 실행)는 화면이 바뀌므로 승인 대상.
 use crate::ports::{ApprovalClass, Tool};
 use anyhow::{anyhow, Result};

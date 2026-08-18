@@ -21,14 +21,12 @@ pub fn default_tools() -> Vec<Box<dyn Tool>> {
         Box::new(shell::WriteFile),
         Box::new(shell::ListDir),
     ];
-    // 폰 UI 컨트롤(실험적) — companion 앱 접근성 서비스 필요(루트·adb 불필요). USIX_UI 설정 시에만.
-    if std::env::var("USIX_UI").is_ok() {
-        tools.push(Box::new(ui::Screen));
-        tools.push(Box::new(ui::AppOpen));
-        tools.push(Box::new(ui::UiTap));
-        tools.push(Box::new(ui::UiType));
-        tools.push(Box::new(ui::UiBack));
-    }
+    // 폰 UI 컨트롤 — companion 앱 접근성 서비스 필요(루트·adb 불필요). 기본 등록.
+    tools.push(Box::new(ui::Screen));
+    tools.push(Box::new(ui::AppOpen));
+    tools.push(Box::new(ui::UiTap));
+    tools.push(Box::new(ui::UiType));
+    tools.push(Box::new(ui::UiBack));
     // 알림 브리지(컴패니언 앱) — 카톡·라인 알림 읽기/인라인 답장. USIX_COMPANION 설정 시에만.
     if std::env::var("USIX_COMPANION").is_ok() {
         tools.push(Box::new(companion::NotifList));

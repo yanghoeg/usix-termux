@@ -267,12 +267,11 @@ fn seed_skill(name: &str, body: &str) {
     }
 }
 
-/// 예시 스킬을 심는다. UI 스킬은 도구가 있을 때(USIX_UI)만 — 없는 도구를 모델에 가르치지 않기 위해.
+/// 예시 스킬을 심는다. UI 도구는 기본 등록이라 kakao_read 도 항상 심는다.
+/// 알림 스킬만 USIX_COMPANION 설정 시(해당 도구가 있을 때) 심는다.
 fn seed_skills() {
     seed_skill("sms_reply.md", SMS_REPLY_SKILL);
-    if std::env::var("USIX_UI").is_ok() {
-        seed_skill("kakao_read.md", KAKAO_READ_SKILL);
-    }
+    seed_skill("kakao_read.md", KAKAO_READ_SKILL);
     if std::env::var("USIX_COMPANION").is_ok() {
         seed_skill("kakao_notify.md", KAKAO_NOTIFY_SKILL);
     }
@@ -323,7 +322,7 @@ pub fn doctor() -> Result<()> {
     }
     println!("{} termux-api (binary)", mark(has_cmd("termux-battery-status")));
     println!("{} Termux:API app (bridge responds)", mark(termux_bridge_ok()));
-    if std::env::var("USIX_UI").is_ok() {
+    {
         let bridge = companion_bridge_ok();
         let acc = bridge && companion_accessibility_ok();
         println!("{} usix-companion 브리지 (127.0.0.1:8760)", mark(bridge));
