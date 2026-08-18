@@ -100,7 +100,7 @@ fn print_help() {
          usix-termux -c \"query\"  one-shot query (non-interactive)\n\n\
          Environment:\n  \
          USIX_BACKEND  llama (default) | ollama\n  \
-         USIX_MODEL    llama=GGUF path (default ~/models/Qwen3.5-4B-Q4_K_M.gguf)\n                \
+         USIX_MODEL    llama=GGUF path (default ~/models/Qwen3.5-2B-Q5_K_M.gguf)\n                \
          ollama=model tag (default qwen2.5:1.5b-instruct-q5_K_M)"
     );
 }

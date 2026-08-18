@@ -99,11 +99,12 @@ fn ollama_model() -> String {
 
 // ── llama.cpp ──
 
-/// 로드할 GGUF 경로 — 기본 Qwen3.5-4B Q4_K_M, `USIX_MODEL` 로 다른 경로 지정 가능.
+/// 로드할 GGUF 경로 — 기본 Qwen3.5-2B Q5_K_M, `USIX_MODEL` 로 다른 경로 지정 가능.
+/// (4B 는 램 ~2.7GB 라 카톡 등 무거운 앱을 포그라운드로 올리면 LMK 가 죽인다. 2B ~1.4GB 로 공존.)
 fn llama_model_path() -> String {
     std::env::var("USIX_MODEL").unwrap_or_else(|_| {
         let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
-        format!("{home}/models/Qwen3.5-4B-Q4_K_M.gguf")
+        format!("{home}/models/Qwen3.5-2B-Q5_K_M.gguf")
     })
 }
 

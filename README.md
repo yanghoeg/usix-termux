@@ -123,7 +123,7 @@ usix-termux -c "..."   # one-shot query (non-interactive; mutating tools auto-de
 | Variable       | Default                                            | Meaning                                   |
 | -------------- | -------------------------------------------------- | ----------------------------------------- |
 | `USIX_BACKEND` | `llama`                                            | `llama` (llama.cpp) or `ollama`           |
-| `USIX_MODEL`   | `~/models/Qwen3.5-4B-Q4_K_M.gguf` (llama)          | GGUF path (llama) or model tag (ollama)   |
+| `USIX_MODEL`   | `~/models/Qwen3.5-2B-Q5_K_M.gguf` (llama)          | GGUF path (llama) or model tag (ollama)   |
 |                | `qwen2.5:1.5b-instruct-q5_K_M` (ollama)            |                                           |
 
 ```bash

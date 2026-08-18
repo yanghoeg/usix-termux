@@ -24,6 +24,9 @@ impl Llm for LlamaCpp {
             "messages": messages,
             "stream": false,
             "temperature": 0,
+            // Qwen3 계열 사고(thinking) 모드 끔 — 켜지면 reasoning_content 로 새고 content 가 비어
+            // 빈 응답이 나간다. 이 kwarg 를 안 쓰는 템플릿(hammer·qwen2.5)에선 무시된다.
+            "chat_template_kwargs": { "enable_thinking": false },
         });
         if !tools.is_empty() {
             body["tools"] = json!(tools);
@@ -56,6 +59,7 @@ impl Llm for LlamaCpp {
             "messages": messages,
             "stream": true,
             "temperature": 0,
+            "chat_template_kwargs": { "enable_thinking": false },
         });
         if !tools.is_empty() {
             body["tools"] = json!(tools);
