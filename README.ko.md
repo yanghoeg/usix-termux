@@ -121,7 +121,7 @@ usix-termux -c "..."   # 한 번 질문 (비대화형; 변경 도구는 자동 �
 | 변수           | 기본값                                             | 의미                                     |
 | -------------- | -------------------------------------------------- | ---------------------------------------- |
 | `USIX_BACKEND` | `llama`                                            | `llama` (llama.cpp) 또는 `ollama`        |
-| `USIX_MODEL`   | `~/models/hammer2.1-3b-q4_k_m.gguf` (llama)        | GGUF 경로(llama) 또는 모델 태그(ollama)  |
+| `USIX_MODEL`   | `~/models/Qwen3.5-4B-Q4_K_M.gguf` (llama)          | GGUF 경로(llama) 또는 모델 태그(ollama)  |
 |                | `qwen2.5:1.5b-instruct-q5_K_M` (ollama)            |                                          |
 
 ```bash
