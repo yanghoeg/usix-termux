@@ -72,8 +72,29 @@ fn parse(text: &str) -> Option<Skill> {
     })
 }
 
+/// 요청과 관련된 스킬만 고른다 — 소형 모델은 무관한 스킬 지침이 끼면 후속 절차를
+/// 놓친다(빈 응답). 요청 토큰이 스킬 name/description/body에 하나라도 걸리면 채택.
+pub fn select<'a>(skills: &'a [Skill], query: &str) -> Vec<&'a Skill> {
+    let q = query.to_lowercase();
+    let tokens: Vec<&str> = q
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|t| t.chars().count() >= 2)
+        .collect();
+    let mut out = Vec::new();
+    for sk in skills {
+        let hay = format!("{} {} {}", sk.name, sk.description, sk.body).to_lowercase();
+        if tokens.iter().any(|t| hay.contains(t)) {
+            out.push(sk);
+            if out.len() >= MAX_ACTIVE {
+                break;
+            }
+        }
+    }
+    out
+}
+
 /// 로드된 스킬을 시스템 프롬프트에 덧붙일 지침 블록으로 합친다. 없으면 빈 문자열.
-pub fn guidance(skills: &[Skill]) -> String {
+pub fn guidance(skills: &[&Skill]) -> String {
     if skills.is_empty() {
         return String::new();
     }
@@ -107,5 +128,27 @@ mod tests {
     #[test]
     fn guidance_empty_when_no_skills() {
         assert_eq!(guidance(&[]), "");
+    }
+
+    #[test]
+    fn select_picks_only_relevant() {
+        let skills = vec![
+            Skill {
+                name: "sms_reply".into(),
+                description: "문자 요약·답장".into(),
+                body: "sms_list 후 요약".into(),
+            },
+            Skill {
+                name: "kakao_notify".into(),
+                description: "카톡 알림 응답".into(),
+                body: "notif_list 사용".into(),
+            },
+        ];
+        let hit = select(&skills, "카톡 알림 확인해줘");
+        assert_eq!(hit.len(), 1);
+        assert_eq!(hit[0].name, "kakao_notify");
+
+        // 무관한 요청이면 아무 스킬도 얹지 않는다.
+        assert!(select(&skills, "배터리 몇 퍼야").is_empty());
     }
 }

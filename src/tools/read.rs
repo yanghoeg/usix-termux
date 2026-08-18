@@ -74,24 +74,38 @@ impl Tool for Contacts {
         ApprovalClass::ReadOnly
     }
     fn run(&self, args: &Value) -> Result<String> {
+        // 소형 모델은 컨텍스트가 4096뿐이라, 수백 명짜리 전체 목록을 넣으면 컨텍스트가
+        // 넘쳐 다음 요청이 400(exceeds context)으로 깨진다. 이름으로 거르고, 이름이
+        // 없거나 매치가 많으면 상한(MAX_HITS)을 두어 항상 작게 돌려준다.
+        const MAX_HITS: usize = 20;
         let raw = termux::run("termux-contact-list", &[])?;
-        let Some(query) = args.get("name").and_then(|v| v.as_str()) else {
-            return Ok(raw);
-        };
-        let query = query.to_lowercase();
-        // 연락처가 많으면 소형 모델 컨텍스트를 아끼려 이름으로 걸러 준다.
         let Ok(Value::Array(all)) = serde_json::from_str::<Value>(&raw) else {
             return Ok(raw);
         };
-        let hits: Vec<Value> = all
+        let query = args
+            .get("name")
+            .and_then(|v| v.as_str())
+            .map(str::to_lowercase);
+        let mut hits: Vec<Value> = all
             .into_iter()
-            .filter(|c| {
-                c.get("name")
+            .filter(|c| match &query {
+                None => true,
+                Some(q) => c
+                    .get("name")
                     .and_then(|v| v.as_str())
-                    .is_some_and(|n| n.to_lowercase().contains(&query))
+                    .is_some_and(|n| n.to_lowercase().contains(q)),
             })
             .collect();
-        Ok(serde_json::to_string(&hits)?)
+        let total = hits.len();
+        hits.truncate(MAX_HITS);
+        let mut out = serde_json::to_string(&hits)?;
+        if total > MAX_HITS {
+            // 잘렸음을 알려 모델이 이름을 더 구체적으로 좁혀 다시 검색하게 한다.
+            out.push_str(&format!(
+                "\n(총 {total}건 중 {MAX_HITS}건만 표시 — 이름을 더 구체적으로 지정해 다시 검색하세요)"
+            ));
+        }
+        Ok(out)
     }
 }
 

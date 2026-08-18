@@ -78,7 +78,8 @@ skills/
 - **Termux** + Rust 툴체인: `pkg install rust`
 - **백엔드** (택 1):
   - **llama.cpp** (기본): `pkg install llama-cpp llama-cpp-backend-opencl` + GGUF 모델
-    하나. tool-calling 안정성을 위해 Qwen2.5-3B-Instruct Q5_K_M 권장.
+    하나. 기본 모델은 Hammer2.1-3b Q4_K_M — 온디바이스 3B 중 tool-calling 판단이 가장
+    낫다. `setup`이 자동으로 받는다(`llama-model-get hammer`).
     Adreno GPU는 반드시 `llama-gpu` 런처(네이티브 Qualcomm OpenCL, `-ngl 99`)로 서버를
     띄운다 — Vulkan/clvk 경로는 garbage 토큰이 나온다.
   - **ollama**: ollama 설치 후 `USIX_BACKEND=ollama`.
@@ -102,14 +103,15 @@ cargo build --release
 ./target/release/usix-termux doctor   # 전제조건 점검
 ```
 
-`setup`은 백엔드를 설치하고 서버를 백그라운드로 띄우며(런처 종료에도 생존), ollama면
-모델까지 받는다. `doctor`는 백엔드별 체크리스트를 출력한다.
+`setup`은 백엔드를 설치하고 서버를 백그라운드로 띄우며(런처 종료에도 생존), 모델까지
+받는다(llama.cpp면 Hammer2.1-3b Q4, ollama면 해당 태그). `doctor`는 백엔드별
+체크리스트를 출력한다.
 
 ## 사용법
 
 ```bash
 usix-termux            # 대화형 TUI
-usix-termux setup      # 백엔드 설치 + 서버 기동 (+ollama면 모델 다운로드)
+usix-termux setup      # 백엔드 설치 + 모델 다운로드 + 서버 기동
 usix-termux doctor     # 전제조건 점검
 usix-termux -c "..."   # 한 번 질문 (비대화형; 변경 도구는 자동 거부)
 ```
@@ -119,7 +121,7 @@ usix-termux -c "..."   # 한 번 질문 (비대화형; 변경 도구는 자동 �
 | 변수           | 기본값                                             | 의미                                     |
 | -------------- | -------------------------------------------------- | ---------------------------------------- |
 | `USIX_BACKEND` | `llama`                                            | `llama` (llama.cpp) 또는 `ollama`        |
-| `USIX_MODEL`   | `~/models/qwen2.5-3b-instruct-q5_k_m.gguf` (llama) | GGUF 경로(llama) 또는 모델 태그(ollama)  |
+| `USIX_MODEL`   | `~/models/hammer2.1-3b-q4_k_m.gguf` (llama)        | GGUF 경로(llama) 또는 모델 태그(ollama)  |
 |                | `qwen2.5:1.5b-instruct-q5_K_M` (ollama)            |                                          |
 
 ```bash
@@ -256,8 +258,9 @@ USIX_COMPANION=1 usix-termux                 # notif_list / notif_reply 등록�
 
 스킬은 `~/.usix/skills/*.md`에 두는 **마크다운 절차**로, 모델에게 기존 도구를 엮는 법을
 알려준다 — **재빌드가 필요 없다.** 각 파일은 작은 frontmatter(`name`, `description`)와
-단계별 본문으로 되어 있고, 이 본문이 시스템 프롬프트에 덧붙는다. 소형 로컬 모델 컨텍스트
-보호를 위해 **한 번에 최대 8개**만 활성화된다.
+단계별 본문으로 되어 있다. 매 요청마다 그 요청과 **관련된 스킬만**(name·description·본문
+키워드 매칭) 시스템 프롬프트에 덧붙으며, 최대 8개다 — 소형 로컬 모델의 컨텍스트를 당면
+작업에 집중시키기 위함이다.
 
 `setup`이 예시 하나 **`sms_reply`** — "최근 문자 요약하고 답장 도와줘" — 를 심는다.
 `sms_list`로 읽어 요약하고, 원하면 문자 초안을 잡아 `sms_send`로 보낸다. `sms_send`는

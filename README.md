@@ -80,7 +80,8 @@ The Android companion app lives in a **separate repo** ([usix-companion](https:/
 - **Termux** with the Rust toolchain: `pkg install rust`
 - **Backend** (one of):
   - **llama.cpp** (default): `pkg install llama-cpp llama-cpp-backend-opencl` plus one
-    GGUF model. Qwen2.5-3B-Instruct Q5_K_M is recommended for tool-calling reliability.
+    GGUF model. Hammer2.1-3b Q4_K_M is the default — best tool-calling judgment among
+    on-device 3B models; `setup` downloads it automatically (`llama-model-get hammer`).
     On Adreno GPUs the server must be launched with the `llama-gpu` wrapper (native
     Qualcomm OpenCL, `-ngl 99`) — the Vulkan/clvk path emits garbage tokens.
   - **ollama**: install ollama and set `USIX_BACKEND=ollama`.
@@ -105,13 +106,14 @@ cargo build --release
 ```
 
 `setup` installs the backend, starts the server in the background (surviving launcher
-exit), and — for ollama — pulls the model. `doctor` prints a per-backend checklist.
+exit), and downloads the model (Hammer2.1-3b Q4 for llama.cpp, or the tag for ollama).
+`doctor` prints a per-backend checklist.
 
 ## Usage
 
 ```bash
 usix-termux            # interactive TUI
-usix-termux setup      # install backend + start server (+ pull model on ollama)
+usix-termux setup      # install backend + download model + start server
 usix-termux doctor     # check prerequisites
 usix-termux -c "..."   # one-shot query (non-interactive; mutating tools auto-denied)
 ```
@@ -121,7 +123,7 @@ usix-termux -c "..."   # one-shot query (non-interactive; mutating tools auto-de
 | Variable       | Default                                            | Meaning                                   |
 | -------------- | -------------------------------------------------- | ----------------------------------------- |
 | `USIX_BACKEND` | `llama`                                            | `llama` (llama.cpp) or `ollama`           |
-| `USIX_MODEL`   | `~/models/qwen2.5-3b-instruct-q5_k_m.gguf` (llama) | GGUF path (llama) or model tag (ollama)   |
+| `USIX_MODEL`   | `~/models/hammer2.1-3b-q4_k_m.gguf` (llama)        | GGUF path (llama) or model tag (ollama)   |
 |                | `qwen2.5:1.5b-instruct-q5_K_M` (ollama)            |                                           |
 
 ```bash
@@ -265,8 +267,9 @@ Honest caveats:
 
 Skills are markdown procedures in `~/.usix/skills/*.md` that teach the model how to chain
 existing tools — **no recompile needed**. Each file has a small frontmatter (`name`,
-`description`) plus a step-by-step body, which is appended to the system prompt. Up to 8
-are active at once (to protect the small local model's context).
+`description`) plus a step-by-step body. On each request, only the skills relevant to that
+request (keyword-matched against name/description/body) are appended to the system prompt,
+up to 8 — this keeps the small local model's context focused on the task at hand.
 
 `setup` seeds one example, **`sms_reply`** — "summarize my recent texts and help me reply":
 it reads via `sms_list`, summarizes, and (on request) drafts an SMS and sends it through

@@ -2,6 +2,7 @@
 // usix의 PermissionRequest 처럼, 변경 도구는 실행하지 않고 `NeedApproval` 로 UI에 넘긴다.
 // UI가 approve(true/false)로 결정을 돌려주면 이어서 진행한다.
 use crate::domain::registry::Registry;
+use crate::domain::skills::Skill;
 use crate::ports::{ApprovalClass, Llm};
 use anyhow::Result;
 use serde_json::{json, Value};
@@ -11,6 +12,9 @@ const SYSTEM_PROMPT: &str = "너는 안드로이드 Termux 폰 비서다. \
 필요하면 제공된 도구를 호출해 실제 폰 정보를 조회하거나 작업한다. \
 문자 발송·전화 걸기 같은 변경 작업은 반드시 도구로만 수행한다. \
 전화번호를 모르면 절대 임의로 지어내지 말고 contacts 도구로 이름을 조회해 번호를 찾는다. \
+sms_send 의 number 에는 contacts 로 찾은 실제 숫자만 넣는다. \
+이름이나 '부인 전화번호' 같은 자리표시자를 number 에 넣지 마라. \
+번호를 아직 모르면 sms_send 를 부르지 말고, 그 턴에는 contacts 만 호출해 번호부터 받는다. \
 조회해도 없으면 번호를 추측하지 말고 사용자에게 번호를 물어본다. \
 사용자가 준 메시지 문구는 그대로 보낸다(이름으로 오해해 문장을 새로 짓지 않는다). \
 도구 결과를 바탕으로 한국어로 간결하게 답한다.";
@@ -33,16 +37,14 @@ pub struct Agent<'a> {
     pending: VecDeque<Value>, // 아직 실행 안 한 tool_calls
     awaiting: Option<Value>,  // 승인 대기 중인 변경 호출
     steps: usize,
+    skills: Vec<Skill>, // 전체 로드분 — submit마다 요청 관련분만 프롬프트에 얹는다.
 }
 
 impl<'a> Agent<'a> {
     pub fn new(llm: &'a dyn Llm, registry: &'a Registry) -> Self {
-        // 기본 지침 + ~/.usix/skills/*.md 절차형 스킬(있으면 덧붙임).
-        let content = format!(
-            "{SYSTEM_PROMPT}{}",
-            crate::domain::skills::guidance(&crate::domain::skills::load())
-        );
-        let system = json!({ "role": "system", "content": content });
+        // 스킬은 로드만 해두고, 프롬프트에는 submit에서 요청 관련분만 얹는다. 무관한
+        // 스킬 지침이 끼면 소형 모델이 후속 절차를 놓쳐(빈 응답) 흐름이 깨진다.
+        let system = json!({ "role": "system", "content": SYSTEM_PROMPT });
         Self {
             llm,
             registry,
@@ -51,10 +53,15 @@ impl<'a> Agent<'a> {
             pending: VecDeque::new(),
             awaiting: None,
             steps: 0,
+            skills: crate::domain::skills::load(),
         }
     }
 
     pub fn submit(&mut self, user: &str) {
+        // 이번 요청과 관련된 스킬만 골라 system 프롬프트를 재구성한다.
+        let relevant = crate::domain::skills::select(&self.skills, user);
+        let content = format!("{SYSTEM_PROMPT}{}", crate::domain::skills::guidance(&relevant));
+        self.messages[0] = json!({ "role": "system", "content": content });
         self.messages
             .push(json!({ "role": "user", "content": user }));
         self.steps = 0;
