@@ -288,18 +288,19 @@ fn termux_bridge_ok() -> bool {
         .unwrap_or(false)
 }
 
-/// adb 기기 연결 점검 — `adb get-state` 가 "device" 면 연결됨(무응답 대비 timeout).
-fn adb_device_connected() -> bool {
-    Command::new("timeout")
-        .args(["5", "adb", "get-state"])
-        .output()
-        .map(|o| String::from_utf8_lossy(&o.stdout).trim() == "device")
-        .unwrap_or(false)
-}
-
-/// 컴패니언 알림 브리지 점검 — 127.0.0.1:8760/health 가 응답하면 앱이 살아 있는 것.
+/// 컴패니언 브리지 점검 — 127.0.0.1:8760/health 가 응답하면 앱이 살아 있는 것.
 fn companion_bridge_ok() -> bool {
     ureq::get("http://127.0.0.1:8760/health").call().is_ok()
+}
+
+/// /health 의 accessibility 플래그 — 접근성 서비스가 연결돼 화면 제어가 가능한지.
+fn companion_accessibility_ok() -> bool {
+    ureq::get("http://127.0.0.1:8760/health")
+        .call()
+        .ok()
+        .and_then(|r| r.into_json::<serde_json::Value>().ok())
+        .and_then(|v| v.get("accessibility").and_then(|a| a.as_bool()))
+        .unwrap_or(false)
 }
 
 /// doctor — prerequisite checks (per backend).
@@ -323,12 +324,12 @@ pub fn doctor() -> Result<()> {
     println!("{} termux-api (binary)", mark(has_cmd("termux-battery-status")));
     println!("{} Termux:API app (bridge responds)", mark(termux_bridge_ok()));
     if std::env::var("USIX_UI").is_ok() {
-        let adb = has_cmd("adb");
-        let connected = adb && adb_device_connected();
-        println!("{} adb (android-tools)", mark(adb));
-        println!("{} adb device connected", mark(connected));
-        if !connected {
-            println!("   → 개발자 옵션 > 무선 디버깅 페어링 후: adb pair localhost:PORT / adb connect localhost:PORT");
+        let bridge = companion_bridge_ok();
+        let acc = bridge && companion_accessibility_ok();
+        println!("{} usix-companion 브리지 (127.0.0.1:8760)", mark(bridge));
+        println!("{} 접근성(화면 제어) 연결됨", mark(acc));
+        if !acc {
+            println!("   → companion 앱에서 '접근성(화면 제어)' 권한을 켜세요.");
         }
     }
     if std::env::var("USIX_COMPANION").is_ok() {

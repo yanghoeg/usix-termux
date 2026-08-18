@@ -1,9 +1,17 @@
-// TOOLS — 폰 UI 컨트롤(실험적). 온디바이스 adb(무선 디버깅, 루트 불필요)로 화면을 읽고 앱을 연다.
-// USIX_UI 가 설정됐을 때만 등록된다(tools/mod.rs). 읽기(ui_dump)는 자동, 앱 실행(app_open)은 승인.
+// TOOLS — 폰 UI 컨트롤(실험적). usix-companion 앱의 접근성 서비스를 통해 루트·adb 없이 화면을 읽고
+// 탭·입력한다. 8760 브리지의 /screen·/tap·/type·/back·/open 을 친다. USIX_UI 설정 시에만 등록된다.
+// 읽기(ui_dump)는 자동, 나머지(탭·입력·앱 실행)는 화면이 바뀌므로 승인 대상.
 use crate::ports::{ApprovalClass, Tool};
 use anyhow::{anyhow, Result};
 use serde_json::{json, Value};
-use std::process::Command;
+
+const COMPANION_PORT: u16 = 8760;
+// 화면 요소가 많으면 소형 모델 컨텍스트 보호를 위해 상한을 둔다.
+const MAX_NODES: usize = 80;
+
+fn url(path: &str) -> String {
+    format!("http://127.0.0.1:{COMPANION_PORT}{path}")
+}
 
 fn required_str<'a>(args: &'a Value, key: &str) -> Result<&'a str> {
     args.get(key)
@@ -11,96 +19,36 @@ fn required_str<'a>(args: &'a Value, key: &str) -> Result<&'a str> {
         .ok_or_else(|| anyhow!("필수 인자 누락: {key}"))
 }
 
-// uiautomator dump 는 수 초 걸릴 수 있어 termux 기본(8s)보다 넉넉히.
-const ADB_TIMEOUT_SECS: &str = "12";
-// 화면 요소가 많으면 소형 모델 컨텍스트 보호를 위해 상한을 둔다.
-const MAX_NODES: usize = 80;
-
-/// `timeout <N> adb shell <args>` — termux.rs::run 과 동일한 timeout 가드 패턴.
-/// 기기 미연결이면 무선 디버깅 페어링을 안내한다.
-fn adb_shell(args: &[&str]) -> Result<String> {
-    let out = Command::new("timeout")
-        .arg(ADB_TIMEOUT_SECS)
-        .arg("adb")
-        .arg("shell")
-        .args(args)
-        .output()
-        .map_err(|e| anyhow!("adb 실행 실패 (android-tools 설치됨?): {e}"))?;
-    if out.status.code() == Some(124) {
-        return Err(anyhow!("adb 무응답 (>{ADB_TIMEOUT_SECS}s)"));
+/// 브리지 무응답(앱 미설치/미실행) → 원인 안내. 503 은 접근성 권한 꺼짐으로 따로 처리.
+fn bridge_err(e: ureq::Error) -> anyhow::Error {
+    match e {
+        ureq::Error::Status(503, _) => anyhow!(
+            "접근성 서비스 꺼짐 — usix-companion 앱에서 '접근성(화면 제어)' 권한을 켜라."
+        ),
+        other => anyhow!(
+            "companion 브리지 무응답 — usix-companion 앱을 설치·실행했는지 확인하라. ({other})"
+        ),
     }
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    let low = stderr.to_lowercase();
-    if low.contains("no devices") || low.contains("device offline") || low.contains("not found") {
-        return Err(anyhow!(
-            "adb 기기 미연결 — 개발자 옵션 > 무선 디버깅으로 페어링 후 `adb connect localhost:PORT`. `usix-termux doctor` 로 점검."
-        ));
-    }
-    if !out.status.success() {
-        return Err(anyhow!("adb 오류: {}", stderr.trim()));
-    }
-    Ok(String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
-fn attr<'a>(node: &'a str, key: &str) -> Option<&'a str> {
-    let pat = format!("{key}=\"");
-    let start = node.find(&pat)? + pat.len();
-    let rest = &node[start..];
-    let end = rest.find('"')?;
-    Some(&rest[..end])
+fn bridge_get(path: &str) -> Result<Value> {
+    let resp = ureq::get(&url(path)).call().map_err(bridge_err)?;
+    resp.into_json().map_err(|e| anyhow!("응답 파싱 실패: {e}"))
 }
 
-fn unescape(s: &str) -> String {
-    s.replace("&amp;", "&")
-        .replace("&lt;", "<")
-        .replace("&gt;", ">")
-        .replace("&quot;", "\"")
-        .replace("&apos;", "'")
+fn bridge_post(path: &str, body: Value) -> Result<Value> {
+    let resp = ureq::post(&url(path)).send_json(body).map_err(bridge_err)?;
+    resp.into_json().map_err(|e| anyhow!("응답 파싱 실패: {e}"))
 }
 
-/// `[x1,y1][x2,y2]` → 중심 (cx,cy).
-fn center(bounds: &str) -> Option<(i64, i64)> {
-    let nums: Vec<i64> = bounds
-        .split(|c: char| !c.is_ascii_digit() && c != '-')
-        .filter(|s| !s.is_empty())
-        .filter_map(|s| s.parse().ok())
-        .collect();
-    if nums.len() != 4 {
-        return None;
+/// {ok:bool} 응답을 성공 메시지 또는 에러로 변환.
+fn expect_ok(body: &Value, on_ok: String, on_fail: &str) -> Result<String> {
+    if body.get("ok").and_then(|v| v.as_bool()) == Some(true) {
+        Ok(on_ok)
+    } else {
+        let err = body.get("error").and_then(|v| v.as_str()).unwrap_or(on_fail);
+        Err(anyhow!("{err}"))
     }
-    Some(((nums[0] + nums[2]) / 2, (nums[1] + nums[3]) / 2))
-}
-
-/// uiautomator XML → 텍스트/클릭가능 요소의 (라벨, 중심x, 중심y). XML 의존성 없이 손으로 스캔.
-pub fn parse_uiautomator(xml: &str) -> Vec<(String, i64, i64)> {
-    let mut out = Vec::new();
-    for chunk in xml.split("<node ").skip(1) {
-        let node = chunk.split('>').next().unwrap_or(chunk);
-        let text = attr(node, "text").map(unescape).unwrap_or_default();
-        let desc = attr(node, "content-desc").map(unescape).unwrap_or_default();
-        // `long-clickable="true"` 오탐 방지 위해 앞 공백 포함 검사.
-        let clickable = node.contains(" clickable=\"true\"");
-        let label = if !text.is_empty() {
-            text
-        } else if !desc.is_empty() {
-            desc
-        } else {
-            String::new()
-        };
-        if label.is_empty() && !clickable {
-            continue;
-        }
-        let Some((cx, cy)) = attr(node, "bounds").and_then(center) else {
-            continue;
-        };
-        let label = if label.is_empty() {
-            "(빈 버튼)".to_string()
-        } else {
-            label
-        };
-        out.push((label, cx, cy));
-    }
-    out
 }
 
 pub struct Screen;
@@ -109,7 +57,7 @@ impl Tool for Screen {
         "ui_dump"
     }
     fn description(&self) -> &str {
-        "현재 폰 화면에 보이는 텍스트·버튼과 위치(x,y)를 읽는다. 화면 내용을 파악할 때 쓴다."
+        "현재 폰 화면에 보이는 텍스트·버튼과 위치(x,y)를 읽는다. 화면 내용을 파악하거나 누를 위치를 찾을 때 쓴다."
     }
     fn parameters(&self) -> Value {
         json!({ "type": "object", "properties": {} })
@@ -118,22 +66,31 @@ impl Tool for Screen {
         ApprovalClass::ReadOnly
     }
     fn run(&self, _args: &Value) -> Result<String> {
-        // dump 는 파일로 쓰므로(stdout 은 안내문) 버리고 cat 으로 XML 을 회수. 고정 문자열 = 안전.
-        let xml = adb_shell(&[
-            "uiautomator dump /sdcard/window_dump.xml >/dev/null 2>&1; cat /sdcard/window_dump.xml",
-        ])?;
-        let nodes = parse_uiautomator(&xml);
-        if nodes.is_empty() {
+        let body = bridge_get("/screen")?;
+        let Value::Array(items) = body else {
+            return Ok("(화면에서 읽을 요소 없음)".into());
+        };
+        if items.is_empty() {
             return Ok("(화면에서 읽을 요소 없음)".into());
         }
-        let lines: Vec<String> = nodes
+        let lines: Vec<String> = items
             .iter()
             .take(MAX_NODES)
-            .map(|(t, x, y)| format!("\"{t}\" @ ({x},{y})"))
+            .map(|n| {
+                let t = n.get("text").and_then(|v| v.as_str()).unwrap_or("");
+                let x = n.get("x").and_then(|v| v.as_i64()).unwrap_or(0);
+                let y = n.get("y").and_then(|v| v.as_i64()).unwrap_or(0);
+                let tag = if n.get("editable").and_then(|v| v.as_bool()) == Some(true) {
+                    " [입력창]"
+                } else {
+                    ""
+                };
+                format!("\"{t}\" @ ({x},{y}){tag}")
+            })
             .collect();
         let mut s = lines.join("\n");
-        if nodes.len() > MAX_NODES {
-            s.push_str(&format!("\n…(+{} 개 더)", nodes.len() - MAX_NODES));
+        if items.len() > MAX_NODES {
+            s.push_str(&format!("\n…(+{} 개 더)", items.len() - MAX_NODES));
         }
         Ok(s)
     }
@@ -161,7 +118,6 @@ impl Tool for AppOpen {
     }
     fn run(&self, args: &Value) -> Result<String> {
         let package = required_str(args, "package")?;
-        // adb shell 은 인자를 기기 셸이 재파싱 → 패키지명을 문자집합으로 제한해 인젝션 차단.
         if package.is_empty()
             || !package
                 .chars()
@@ -169,15 +125,93 @@ impl Tool for AppOpen {
         {
             return Err(anyhow!("잘못된 패키지명: {package}"));
         }
-        adb_shell(&[
-            "monkey",
-            "-p",
-            package,
-            "-c",
-            "android.intent.category.LAUNCHER",
-            "1",
-        ])?;
-        Ok(format!("앱 실행 → {package}"))
+        let body = bridge_post("/open", json!({ "package": package }))?;
+        expect_ok(&body, format!("앱 실행 → {package}"), "실행 실패(런처 인텐트 없음)")
+    }
+}
+
+pub struct UiTap;
+impl Tool for UiTap {
+    fn name(&self) -> &str {
+        "ui_tap"
+    }
+    fn description(&self) -> &str {
+        "화면 좌표 (x,y)를 탭한다. ui_dump 로 얻은 요소 위치를 눌러 버튼·입력창을 조작한다."
+    }
+    fn parameters(&self) -> Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "x": { "type": "integer", "description": "탭할 x 좌표(px)" },
+                "y": { "type": "integer", "description": "탭할 y 좌표(px)" }
+            },
+            "required": ["x", "y"]
+        })
+    }
+    fn approval(&self) -> ApprovalClass {
+        ApprovalClass::Mutating
+    }
+    fn run(&self, args: &Value) -> Result<String> {
+        let x = args
+            .get("x")
+            .and_then(|v| v.as_i64())
+            .ok_or_else(|| anyhow!("x 는 정수여야 함"))?;
+        let y = args
+            .get("y")
+            .and_then(|v| v.as_i64())
+            .ok_or_else(|| anyhow!("y 는 정수여야 함"))?;
+        let body = bridge_post("/tap", json!({ "x": x, "y": y }))?;
+        expect_ok(&body, format!("탭 → ({x},{y})"), "탭 실패")
+    }
+}
+
+pub struct UiType;
+impl Tool for UiType {
+    fn name(&self) -> &str {
+        "ui_type"
+    }
+    fn description(&self) -> &str {
+        "현재 포커스된 입력창에 텍스트를 입력한다(한글 정상). 먼저 ui_tap 으로 입력창을 누른 뒤 사용한다."
+    }
+    fn parameters(&self) -> Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "text": { "type": "string", "description": "입력할 텍스트" }
+            },
+            "required": ["text"]
+        })
+    }
+    fn approval(&self) -> ApprovalClass {
+        ApprovalClass::Mutating
+    }
+    fn run(&self, args: &Value) -> Result<String> {
+        let text = required_str(args, "text")?;
+        if text.is_empty() {
+            return Err(anyhow!("빈 텍스트"));
+        }
+        let body = bridge_post("/type", json!({ "text": text }))?;
+        expect_ok(&body, format!("입력 → \"{text}\""), "입력 실패(포커스된 입력창 없음)")
+    }
+}
+
+pub struct UiBack;
+impl Tool for UiBack {
+    fn name(&self) -> &str {
+        "ui_back"
+    }
+    fn description(&self) -> &str {
+        "뒤로가기(back)를 누른다. 화면을 이전으로 되돌릴 때 쓴다."
+    }
+    fn parameters(&self) -> Value {
+        json!({ "type": "object", "properties": {} })
+    }
+    fn approval(&self) -> ApprovalClass {
+        ApprovalClass::Mutating
+    }
+    fn run(&self, _args: &Value) -> Result<String> {
+        let body = bridge_post("/back", json!({}))?;
+        expect_ok(&body, "뒤로가기".into(), "뒤로가기 실패")
     }
 }
 
@@ -185,22 +219,30 @@ impl Tool for AppOpen {
 mod tests {
     use super::*;
 
-    #[test]
-    fn parses_nodes_with_centers_and_entities() {
-        let xml = r#"<?xml version='1.0'?><hierarchy>
-        <node index="0" text="밥 &amp; 국" bounds="[0,100][200,300]" clickable="false"/>
-        <node index="1" text="" content-desc="전송" bounds="[400,800][600,900]" clickable="true"/>
-        <node index="2" text="" content-desc="" bounds="[0,0][10,10]" long-clickable="true"/>
-        </hierarchy>"#;
-        let nodes = parse_uiautomator(xml);
-        assert_eq!(nodes.len(), 2, "빈 라벨+비클릭 노드는 제외돼야 함: {nodes:?}");
-        assert_eq!(nodes[0], ("밥 & 국".to_string(), 100, 200));
-        assert_eq!(nodes[1], ("전송".to_string(), 500, 850));
-    }
+    // 아래 테스트들은 네트워크 이전(인자 검증) 단계에서 거부되는 경로만 확인한다 — 기기 불필요.
 
     #[test]
     fn app_open_rejects_injection() {
         let r = AppOpen.run(&json!({ "package": "com.x; rm -rf /" }));
         assert!(r.is_err(), "인젝션 패키지명이 통과됨");
+    }
+
+    #[test]
+    fn ui_tap_requires_integers() {
+        assert!(UiTap.run(&json!({ "x": "5; reboot", "y": 10 })).is_err());
+        assert!(UiTap.run(&json!({ "y": 10 })).is_err());
+    }
+
+    #[test]
+    fn ui_type_rejects_empty() {
+        assert!(UiType.run(&json!({ "text": "" })).is_err());
+        assert!(UiType.run(&json!({})).is_err());
+    }
+
+    #[test]
+    fn expect_ok_maps_ok_and_error() {
+        assert!(expect_ok(&json!({ "ok": true }), "good".into(), "bad").is_ok());
+        let e = expect_ok(&json!({ "ok": false, "error": "boom" }), "good".into(), "bad");
+        assert_eq!(e.unwrap_err().to_string(), "boom");
     }
 }
