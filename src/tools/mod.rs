@@ -25,6 +25,7 @@ pub fn default_tools() -> Vec<Box<dyn Tool>> {
     tools.push(Box::new(ui::Screen));
     tools.push(Box::new(ui::AppOpen));
     tools.push(Box::new(ui::UiTap));
+    tools.push(Box::new(ui::UiTapText));
     tools.push(Box::new(ui::UiType));
     tools.push(Box::new(ui::UiBack));
     // 알림 브리지(컴패니언 앱) — 카톡·라인 알림 읽기/인라인 답장. kakao_read 스킬의 기본 경로라 항상 등록.

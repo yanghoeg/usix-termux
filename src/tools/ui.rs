@@ -1,13 +1,33 @@
 // TOOLS — 폰 UI 컨트롤(실험적). usix-companion 앱의 접근성 서비스를 통해 루트·adb 없이 화면을 읽고
 // 탭·입력한다. 8760 브리지의 /screen·/tap·/type·/back·/open 을 친다. 기본 등록된다.
-// 읽기(ui_dump)는 자동, 나머지(탭·입력·앱 실행)는 화면이 바뀌므로 승인 대상.
+//
+// 소형 모델이 생좌표(x,y)를 못 맞추므로, 모델에겐 좌표를 숨기고 "번호(index) 또는 텍스트"로만
+// 조작하게 한다. ui_dump 가 화면 요소에 번호를 매겨 캐시에 저장하고, ui_tap 은 그 번호를,
+// ui_tap_text 는 보이는 텍스트를 받는다. 탭·입력·뒤로 뒤엔 화면을 자동 재읽기(re-dump)해 결과로
+// 돌려준다 → 모델이 "쏘고 잊는" 대신 즉시 최신 화면을 보고 다음 수를 정한다(행동 후 검증).
 use crate::ports::{ApprovalClass, Tool};
 use anyhow::{anyhow, Result};
 use serde_json::{json, Value};
+use std::sync::{Mutex, OnceLock};
 
 const COMPANION_PORT: u16 = 8760;
 // 화면 요소가 많으면 소형 모델 컨텍스트 보호를 위해 상한을 둔다.
 const MAX_NODES: usize = 80;
+
+/// 화면 요소 하나 — 모델엔 text 만 보이고, 좌표는 탭할 때 내부에서만 쓴다.
+struct Elem {
+    text: String,
+    x: i64,
+    y: i64,
+    editable: bool,
+}
+
+/// 마지막 ui_dump 결과(번호→요소). ui_tap 이 번호로 좌표를 되짚는다. 단일 워커 스레드가
+/// advance() 를 순차 실행하므로 경합은 없지만, 안전을 위해 Mutex 로 감싼다.
+fn last() -> &'static Mutex<Vec<Elem>> {
+    static LAST: OnceLock<Mutex<Vec<Elem>>> = OnceLock::new();
+    LAST.get_or_init(|| Mutex::new(Vec::new()))
+}
 
 fn url(path: &str) -> String {
     format!("http://127.0.0.1:{COMPANION_PORT}{path}")
@@ -51,13 +71,78 @@ fn expect_ok(body: &Value, on_ok: String, on_fail: &str) -> Result<String> {
     }
 }
 
+/// 패키지명 인젝션 가드 — /screen·/open 은 브리지가 그대로 쓰므로 charset 을 제한한다.
+fn valid_pkg(pkg: &str) -> bool {
+    !pkg.is_empty()
+        && pkg
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '_')
+}
+
+/// /screen JSON 배열 → Elem 벡터. (순수: 기기 불필요, 테스트 가능)
+fn parse_elems(body: &Value) -> Vec<Elem> {
+    let Some(arr) = body.as_array() else {
+        return Vec::new();
+    };
+    arr.iter()
+        .map(|n| Elem {
+            text: n.get("text").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+            x: n.get("x").and_then(|v| v.as_i64()).unwrap_or(0),
+            y: n.get("y").and_then(|v| v.as_i64()).unwrap_or(0),
+            editable: n.get("editable").and_then(|v| v.as_bool()).unwrap_or(false),
+        })
+        .collect()
+}
+
+/// 요소에 번호를 매겨 모델용 목록으로. 좌표는 넣지 않는다. (순수: 테스트 가능)
+fn number_elems(elems: &[Elem]) -> String {
+    elems
+        .iter()
+        .enumerate()
+        .map(|(i, e)| {
+            let tag = if e.editable { " [입력창]" } else { "" };
+            format!("[{i}] \"{}\"{tag}", e.text)
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// text 에 q(대소문자 무시)가 포함된 첫 요소의 인덱스. (순수: 테스트 가능)
+fn find_text(elems: &[Elem], q: &str) -> Option<usize> {
+    let ql = q.to_lowercase();
+    elems.iter().position(|e| e.text.to_lowercase().contains(&ql))
+}
+
+/// /screen 을 읽어 캐시에 저장하고 번호 매긴 목록을 돌려준다. ui_dump 와 모든 자동검증 꼬리가 공유.
+/// pkg 가 있으면 그 앱 창을, 없으면 최상위 앱 창을 읽는다.
+fn dump_and_cache(pkg: Option<&str>) -> Result<String> {
+    let path = match pkg {
+        Some(p) if !p.is_empty() => format!("/screen?package={p}"),
+        _ => "/screen".to_string(),
+    };
+    let body = bridge_get(&path)?;
+    let all = parse_elems(&body);
+    if all.is_empty() {
+        *last().lock().unwrap() = Vec::new();
+        return Ok("(화면에서 읽을 요소 없음)".into());
+    }
+    let total = all.len();
+    let shown: Vec<Elem> = all.into_iter().take(MAX_NODES).collect();
+    let mut s = number_elems(&shown);
+    if total > MAX_NODES {
+        s.push_str(&format!("\n…(+{} 개 더)", total - MAX_NODES));
+    }
+    *last().lock().unwrap() = shown;
+    Ok(s)
+}
+
 pub struct Screen;
 impl Tool for Screen {
     fn name(&self) -> &str {
         "ui_dump"
     }
     fn description(&self) -> &str {
-        "현재 폰 화면에 보이는 텍스트·버튼과 위치(x,y)를 읽는다. 화면 내용을 파악하거나 누를 위치를 찾을 때 쓴다. 특정 앱을 읽으려면 package 를 준다(멀티윈도에서 정확)."
+        "현재 폰 화면의 요소를 번호와 함께 읽는다(예: [3] \"메시지 입력\"). 누를 요소의 번호를 ui_tap 에 준다. 특정 앱을 읽으려면 package 를 준다(멀티윈도에서 정확)."
     }
     fn parameters(&self) -> Value {
         json!({
@@ -71,42 +156,15 @@ impl Tool for Screen {
         ApprovalClass::ReadOnly
     }
     fn run(&self, args: &Value) -> Result<String> {
-        let path = match args.get("package").and_then(|v| v.as_str()) {
+        match args.get("package").and_then(|v| v.as_str()) {
             Some(pkg) if !pkg.is_empty() => {
-                if !pkg.chars().all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '_') {
+                if !valid_pkg(pkg) {
                     return Err(anyhow!("잘못된 패키지명: {pkg}"));
                 }
-                format!("/screen?package={pkg}")
+                dump_and_cache(Some(pkg))
             }
-            _ => "/screen".to_string(),
-        };
-        let body = bridge_get(&path)?;
-        let Value::Array(items) = body else {
-            return Ok("(화면에서 읽을 요소 없음)".into());
-        };
-        if items.is_empty() {
-            return Ok("(화면에서 읽을 요소 없음)".into());
+            _ => dump_and_cache(None),
         }
-        let lines: Vec<String> = items
-            .iter()
-            .take(MAX_NODES)
-            .map(|n| {
-                let t = n.get("text").and_then(|v| v.as_str()).unwrap_or("");
-                let x = n.get("x").and_then(|v| v.as_i64()).unwrap_or(0);
-                let y = n.get("y").and_then(|v| v.as_i64()).unwrap_or(0);
-                let tag = if n.get("editable").and_then(|v| v.as_bool()) == Some(true) {
-                    " [입력창]"
-                } else {
-                    ""
-                };
-                format!("\"{t}\" @ ({x},{y}){tag}")
-            })
-            .collect();
-        let mut s = lines.join("\n");
-        if items.len() > MAX_NODES {
-            s.push_str(&format!("\n…(+{} 개 더)", items.len() - MAX_NODES));
-        }
-        Ok(s)
     }
 }
 
@@ -116,7 +174,7 @@ impl Tool for AppOpen {
         "app_open"
     }
     fn description(&self) -> &str {
-        "패키지명으로 앱을 실행한다(예: com.kakao.talk). 화면을 읽기 전에 해당 앱을 연다."
+        "패키지명으로 앱을 실행한다(예: com.kakao.talk). 실행 후 ui_dump 로 화면을 읽어라."
     }
     fn parameters(&self) -> Value {
         json!({
@@ -132,15 +190,16 @@ impl Tool for AppOpen {
     }
     fn run(&self, args: &Value) -> Result<String> {
         let package = required_str(args, "package")?;
-        if package.is_empty()
-            || !package
-                .chars()
-                .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '_')
-        {
+        if !valid_pkg(package) {
             return Err(anyhow!("잘못된 패키지명: {package}"));
         }
+        // 앱 콜드스타트 타이밍이 불안정해 즉시 재덤프는 빈 화면 위험 → 힌트만 주고 모델이 ui_dump 하게.
         let body = bridge_post("/open", json!({ "package": package }))?;
-        expect_ok(&body, format!("앱 실행 → {package}"), "실행 실패(런처 인텐트 없음)")
+        expect_ok(
+            &body,
+            format!("앱 실행 → {package}. ui_dump 로 화면을 읽어라."),
+            "실행 실패(런처 인텐트 없음)",
+        )
     }
 }
 
@@ -150,32 +209,81 @@ impl Tool for UiTap {
         "ui_tap"
     }
     fn description(&self) -> &str {
-        "화면 좌표 (x,y)를 탭한다. ui_dump 로 얻은 요소 위치를 눌러 버튼·입력창을 조작한다."
+        "ui_dump 로 얻은 요소 번호(index)를 눌러 버튼·입력창을 조작한다. 누른 뒤의 화면을 함께 돌려준다."
     }
     fn parameters(&self) -> Value {
         json!({
             "type": "object",
             "properties": {
-                "x": { "type": "integer", "description": "탭할 x 좌표(px)" },
-                "y": { "type": "integer", "description": "탭할 y 좌표(px)" }
+                "index": { "type": "integer", "description": "ui_dump 목록의 요소 번호(예: [3] 이면 3)" }
             },
-            "required": ["x", "y"]
+            "required": ["index"]
         })
     }
     fn approval(&self) -> ApprovalClass {
         ApprovalClass::Mutating
     }
     fn run(&self, args: &Value) -> Result<String> {
-        let x = args
-            .get("x")
+        let index = args
+            .get("index")
             .and_then(|v| v.as_i64())
-            .ok_or_else(|| anyhow!("x 는 정수여야 함"))?;
-        let y = args
-            .get("y")
-            .and_then(|v| v.as_i64())
-            .ok_or_else(|| anyhow!("y 는 정수여야 함"))?;
+            .ok_or_else(|| anyhow!("index 는 정수여야 함(ui_dump 의 번호)"))?;
+        // 캐시에서 번호→좌표. 네트워크 전에 락을 풀어 I/O 동안 잠그지 않는다.
+        let (x, y) = {
+            let guard = last().lock().unwrap();
+            if guard.is_empty() {
+                return Err(anyhow!("먼저 ui_dump 로 화면을 읽어 번호를 확인하라."));
+            }
+            let i = usize::try_from(index).map_err(|_| anyhow!("잘못된 index: {index}"))?;
+            let e = guard.get(i).ok_or_else(|| {
+                anyhow!("번호 범위 밖: {index} (0..{}). ui_dump 를 다시 읽어라.", guard.len() - 1)
+            })?;
+            (e.x, e.y)
+        };
         let body = bridge_post("/tap", json!({ "x": x, "y": y }))?;
-        expect_ok(&body, format!("탭 → ({x},{y})"), "탭 실패")
+        expect_ok(&body, String::new(), "탭 실패")?;
+        let screen = dump_and_cache(None)?;
+        Ok(format!("탭함(#{index}). 현재 화면:\n{screen}"))
+    }
+}
+
+pub struct UiTapText;
+impl Tool for UiTapText {
+    fn name(&self) -> &str {
+        "ui_tap_text"
+    }
+    fn description(&self) -> &str {
+        "화면에서 그 텍스트가 보이는 요소를 눌러(예: 이름·버튼 라벨). 번호를 몰라도 된다. 누른 뒤의 화면을 함께 돌려준다."
+    }
+    fn parameters(&self) -> Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "text": { "type": "string", "description": "누를 요소에 보이는 텍스트(부분 일치)" }
+            },
+            "required": ["text"]
+        })
+    }
+    fn approval(&self) -> ApprovalClass {
+        ApprovalClass::Mutating
+    }
+    fn run(&self, args: &Value) -> Result<String> {
+        let text = required_str(args, "text")?;
+        if text.is_empty() {
+            return Err(anyhow!("빈 텍스트"));
+        }
+        // fresh 로 읽어 텍스트를 찾는다(캐시 staleness 무관). 탭 후 dump_and_cache 로 다시 갱신.
+        let body = bridge_get("/screen")?;
+        let elems = parse_elems(&body);
+        let idx = find_text(&elems, text).ok_or_else(|| {
+            let shown = &elems[..elems.len().min(MAX_NODES)];
+            anyhow!("화면에서 \"{text}\" 를 못 찾음. 현재 화면:\n{}", number_elems(shown))
+        })?;
+        let (x, y) = (elems[idx].x, elems[idx].y);
+        let tap = bridge_post("/tap", json!({ "x": x, "y": y }))?;
+        expect_ok(&tap, String::new(), "탭 실패")?;
+        let screen = dump_and_cache(None)?;
+        Ok(format!("\"{text}\" 눌렀다(#{idx}). 현재 화면:\n{screen}"))
     }
 }
 
@@ -185,7 +293,7 @@ impl Tool for UiType {
         "ui_type"
     }
     fn description(&self) -> &str {
-        "현재 포커스된 입력창에 텍스트를 입력한다(한글 정상). 먼저 ui_tap 으로 입력창을 누른 뒤 사용한다."
+        "현재 포커스된 입력창에 텍스트를 입력한다(한글 정상). 먼저 입력창을 눌러 포커스한 뒤 사용한다. 입력 뒤의 화면을 함께 돌려준다."
     }
     fn parameters(&self) -> Value {
         json!({
@@ -205,7 +313,9 @@ impl Tool for UiType {
             return Err(anyhow!("빈 텍스트"));
         }
         let body = bridge_post("/type", json!({ "text": text }))?;
-        expect_ok(&body, format!("입력 → \"{text}\""), "입력 실패(포커스된 입력창 없음)")
+        expect_ok(&body, String::new(), "입력 실패(포커스된 입력창 없음)")?;
+        let screen = dump_and_cache(None)?;
+        Ok(format!("입력함(\"{text}\"). 현재 화면:\n{screen}"))
     }
 }
 
@@ -215,7 +325,7 @@ impl Tool for UiBack {
         "ui_back"
     }
     fn description(&self) -> &str {
-        "뒤로가기(back)를 누른다. 화면을 이전으로 되돌릴 때 쓴다."
+        "뒤로가기(back)를 누른다. 화면을 이전으로 되돌린 뒤의 화면을 함께 돌려준다."
     }
     fn parameters(&self) -> Value {
         json!({ "type": "object", "properties": {} })
@@ -225,7 +335,9 @@ impl Tool for UiBack {
     }
     fn run(&self, _args: &Value) -> Result<String> {
         let body = bridge_post("/back", json!({}))?;
-        expect_ok(&body, "뒤로가기".into(), "뒤로가기 실패")
+        expect_ok(&body, String::new(), "뒤로가기 실패")?;
+        let screen = dump_and_cache(None)?;
+        Ok(format!("뒤로가기. 현재 화면:\n{screen}"))
     }
 }
 
@@ -233,7 +345,41 @@ impl Tool for UiBack {
 mod tests {
     use super::*;
 
-    // 아래 테스트들은 네트워크 이전(인자 검증) 단계에서 거부되는 경로만 확인한다 — 기기 불필요.
+    fn elem(text: &str, editable: bool) -> Elem {
+        Elem { text: text.into(), x: 0, y: 0, editable }
+    }
+
+    #[test]
+    fn number_elems_numbers_and_tags_input() {
+        let els = vec![elem("친구", false), elem("메시지 입력", true)];
+        assert_eq!(number_elems(&els), "[0] \"친구\"\n[1] \"메시지 입력\" [입력창]");
+    }
+
+    #[test]
+    fn find_text_substring_case_insensitive() {
+        let els = vec![elem("채팅", false), elem("홍길동 밥 먹었어?", false)];
+        assert_eq!(find_text(&els, "밥"), Some(1));
+        assert_eq!(find_text(&els, "홍길동"), Some(1));
+        assert_eq!(find_text(&els, "없는말"), None);
+    }
+
+    #[test]
+    fn find_text_ignores_case_for_ascii() {
+        let els = vec![elem("Send", false)];
+        assert_eq!(find_text(&els, "send"), Some(0));
+    }
+
+    #[test]
+    fn parse_elems_reads_fields() {
+        let body = json!([{ "text": "확인", "x": 10, "y": 20, "editable": true }]);
+        let els = parse_elems(&body);
+        assert_eq!(els.len(), 1);
+        assert_eq!(els[0].text, "확인");
+        assert_eq!((els[0].x, els[0].y), (10, 20));
+        assert!(els[0].editable);
+    }
+
+    // 아래 도구 테스트들은 네트워크 이전(인자·캐시 검증) 단계에서 거부되는 경로만 확인한다 — 기기 불필요.
 
     #[test]
     fn app_open_rejects_injection() {
@@ -242,9 +388,13 @@ mod tests {
     }
 
     #[test]
-    fn ui_tap_requires_integers() {
-        assert!(UiTap.run(&json!({ "x": "5; reboot", "y": 10 })).is_err());
-        assert!(UiTap.run(&json!({ "y": 10 })).is_err());
+    fn ui_tap_requires_index() {
+        // 문자열 index 는 거부.
+        assert!(UiTap.run(&json!({ "index": "3; reboot" })).is_err());
+        assert!(UiTap.run(&json!({})).is_err());
+        // 캐시가 비어 있으면(덤프 전) 정수 index 도 명확히 거부한다 — 네트워크 이전.
+        let e = UiTap.run(&json!({ "index": 0 })).unwrap_err().to_string();
+        assert!(e.contains("ui_dump"), "덤프 안내 메시지가 아님: {e}");
     }
 
     #[test]
