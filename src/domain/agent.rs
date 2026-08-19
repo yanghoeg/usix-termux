@@ -161,26 +161,22 @@ impl<'a> Agent<'a> {
         if let Some(call) = self.awaiting.take() {
             let (name, args) = parse_call(&call);
             let id = call_id(&call);
-            let result = if yes {
-                match self.registry.get(&name) {
+            if yes {
+                let result = match self.registry.get(&name) {
                     Some(t) => t.run(&args).unwrap_or_else(|e| format!("도구 오류: {e}")),
                     None => format!("알 수 없는 도구: {name}"),
-                }
+                };
+                self.push_tool_result(&id, if result.is_empty() { "(완료)".into() } else { result });
             } else {
-                // 취소는 '실패'가 아니다 — 소형 모델이 자기 오류로 오해해 사과·재시도·헛소리로
-                // 대화가 흐트러지던 문제를 막으려 결과를 명확한 지시문으로 준다.
-                "사용자가 이 작업을 취소했다. 도구는 실행되지 않았다. \
-                 재시도하지 말고, 취소됐다는 것만 한국어로 짧게 알린 뒤 다음 지시를 기다려라."
-                    .into()
-            };
-            self.push_tool_result(
-                &id,
-                if result.is_empty() {
-                    "(완료)".into()
-                } else {
-                    result
-                },
-            );
+                // 취소 시엔 모델을 다시 부르지 않는다(호출부가 턴을 끝냄) — 소형 모델이 "실행했다"고
+                // 거짓 보고하던 문제를 원천 차단. 대신 형제 호출까지 모두 취소 응답으로 채워
+                // 대화 일관성(모든 tool_call 엔 tool 응답이 있어야 함)을 지킨다.
+                self.push_tool_result(&id, "사용자가 취소함. 실행되지 않음.".into());
+                let siblings: Vec<Value> = self.pending.drain(..).collect();
+                for c in siblings {
+                    self.push_tool_result(&call_id(&c), "사용자가 취소함. 실행되지 않음.".into());
+                }
+            }
         }
         Ok(())
     }

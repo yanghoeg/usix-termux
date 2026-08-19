@@ -124,7 +124,10 @@ fn drive(agent: &mut Agent) -> Result<()> {
                 let yes = read_yes_no(&format!("approval needed: {desc}"));
                 agent.approve(yes)?;
                 if !yes {
+                    // 취소면 모델을 다시 돌리지 않고 턴을 끝낸다 — 소형 모델이 "실행했다"고
+                    // 거짓말하는 걸 막는다. 승인이면 계속 진행해 실제 실행 결과를 보고하게 둔다.
                     print_system("cancelled");
+                    return Ok(());
                 }
             }
         }

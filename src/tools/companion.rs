@@ -86,6 +86,19 @@ impl Tool for NotifReply {
             .get("text")
             .and_then(|v| v.as_str())
             .ok_or_else(|| anyhow!("필수 인자 누락: text"))?;
+        // 소형 모델이 key 를 지어내거나 낡은 key 를 쓰는 걸 막는다 — 현재 알림 목록에 실재하는
+        // key 에만 답장을 허용. 없으면 엉뚱한 곳에 발송하는 대신 명확히 되돌린다.
+        let list = ureq::get(&url("/notifications")).call().map_err(bridge_hint)?;
+        let items: Value = list.into_json().map_err(|e| anyhow!("응답 파싱 실패: {e}"))?;
+        let known = items
+            .as_array()
+            .is_some_and(|a| a.iter().any(|n| n.get("key").and_then(|v| v.as_str()) == Some(key)));
+        if !known {
+            return Err(anyhow!(
+                "그 key 의 알림이 현재 목록에 없다(지어냈거나 이미 읽어서 사라짐). \
+                 notif_list 를 다시 불러 최신 key 를 확인한 뒤 다시 시도하라."
+            ));
+        }
         let resp = ureq::post(&url("/reply"))
             .send_json(json!({ "key": key, "text": text }))
             .map_err(bridge_hint)?;
