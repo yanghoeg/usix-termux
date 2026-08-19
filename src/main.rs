@@ -56,14 +56,11 @@ fn model_label() -> String {
     if std::env::var("USIX_BACKEND").as_deref() == Ok("ollama") {
         std::env::var("USIX_MODEL").unwrap_or_else(|_| "qwen2.5:1.5b".into())
     } else {
-        std::env::var("USIX_MODEL")
-            .ok()
-            .and_then(|p| {
-                std::path::Path::new(&p)
-                    .file_stem()
-                    .map(|s| s.to_string_lossy().into_owned())
-            })
-            .unwrap_or_else(|| "qwen2.5-3b".into())
+        let path = bootstrap::llama_model_path();
+        std::path::Path::new(&path)
+            .file_stem()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "qwen".into())
     }
 }
 

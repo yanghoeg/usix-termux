@@ -101,7 +101,7 @@ fn ollama_model() -> String {
 
 /// 로드할 GGUF 경로 — 기본 Qwen3.5-2B Q5_K_M, `USIX_MODEL` 로 다른 경로 지정 가능.
 /// (4B 는 램 ~2.7GB 라 카톡 등 무거운 앱을 포그라운드로 올리면 LMK 가 죽인다. 2B ~1.4GB 로 공존.)
-fn llama_model_path() -> String {
+pub(crate) fn llama_model_path() -> String {
     std::env::var("USIX_MODEL").unwrap_or_else(|_| {
         let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
         format!("{home}/models/Qwen3.5-2B-Q5_K_M.gguf")
@@ -254,7 +254,6 @@ pub fn setup() -> Result<()> {
 // 예시 스킬을 바이너리에 담아 배포 — 재빌드 없이 마크다운으로 능력을 늘리는 진입점.
 const SMS_REPLY_SKILL: &str = include_str!("../skills/sms_reply.md");
 const KAKAO_READ_SKILL: &str = include_str!("../skills/kakao_read.md");
-const KAKAO_NOTIFY_SKILL: &str = include_str!("../skills/kakao_notify.md");
 
 /// 스킬 하나를 ~/.usix/skills/ 에 심는다(없을 때만).
 fn seed_skill(name: &str, body: &str) {
@@ -268,14 +267,10 @@ fn seed_skill(name: &str, body: &str) {
     }
 }
 
-/// 예시 스킬을 심는다. UI 도구는 기본 등록이라 kakao_read 도 항상 심는다.
-/// 알림 스킬만 USIX_COMPANION 설정 시(해당 도구가 있을 때) 심는다.
+/// 예시 스킬을 심는다. 알림 브리지 도구도 기본 등록이라 kakao_read 도 항상 심는다.
 fn seed_skills() {
     seed_skill("sms_reply.md", SMS_REPLY_SKILL);
     seed_skill("kakao_read.md", KAKAO_READ_SKILL);
-    if std::env::var("USIX_COMPANION").is_ok() {
-        seed_skill("kakao_notify.md", KAKAO_NOTIFY_SKILL);
-    }
 }
 
 /// termux-api 브리지 생존 점검 — 바이너리 존재만으론 부족하다. 실제 termux-* 를 짧게
@@ -331,12 +326,8 @@ pub fn doctor() -> Result<()> {
         if !acc {
             println!("   → companion 앱에서 '접근성(화면 제어)' 권한을 켜세요.");
         }
-    }
-    if std::env::var("USIX_COMPANION").is_ok() {
-        let ok = companion_bridge_ok();
-        println!("{} usix-companion 알림 브리지 (127.0.0.1:8760)", mark(ok));
-        if !ok {
-            println!("   → companion/ 앱 설치 후 실행하고 '알림 접근' 권한을 켜세요.");
+        if !bridge {
+            println!("   → 알림 읽기/답장하려면 '알림 접근' 권한도 켜세요.");
         }
     }
     Ok(())

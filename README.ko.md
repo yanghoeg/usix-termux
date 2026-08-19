@@ -63,7 +63,7 @@ tools/
   comms.rs         sms_send, call, reminder                (Mutating, 승인 필요)
   shell.rs         read_file, list_dir (ReadOnly) · shell, write_file (Mutating)
   ui.rs            ui_dump (ReadOnly) · app_open (Mutating)  — adb, USIX_UI 옵트인
-  companion.rs     notif_list (ReadOnly) · notif_reply (Mutating) — 알림 브리지, USIX_COMPANION 옵트인
+  companion.rs     notif_list (ReadOnly) · notif_reply (Mutating) — 알림 브리지, 기본 등록 (kakao_read)
 tui.rs             인라인 ratatui 입력 박스 + 일반 stdout 스트리밍 대화록
   editor.rs        UTF-8 라인 에디터 (멀티라인·히스토리·단어 편집)
   markdown.rs      마크다운 → 스타일 라인 (heading·코드블록·리스트·inline)
@@ -180,7 +180,7 @@ approval needed: sms_send {"number":"010-1234-5678","text":"10분 늦어"}  [y/N
 | `ui_dump`   | ReadOnly | 자동      |
 | `app_open`  | Mutating | `y/N`     |
 
-컴패니언 알림 도구 — `USIX_COMPANION` 설정 시에만 등록(아래 참고):
+컴패니언 알림 도구 — 기본 등록(아래 참고):
 
 | 도구          | 등급     | 승인      |
 | ------------- | -------- | --------- |
@@ -226,9 +226,9 @@ HTTP 브리지를 `127.0.0.1:8760`에 열고, Termux 에이전트가 두 도구�
 - `notif_list` (ReadOnly) — 최근 알림(`pkg`·`title`·`text`·`key`·`canReply`)
 - `notif_reply` (Mutating, `y/N`) — 알림 `key`에 인라인 답장
 
-adb 경로와 달리 이건 **실제로 답장이 된다** — (앱 UI가 아니라 알림을 통해) 카톡 읽기→답장
-루프를 처음으로 닫는 컷이다. `USIX_COMPANION` 설정 시에만 등록된다. 번들 스킬 `kakao_notify`가
-카톡 알림을 요약하고, 원하면 답장한다.
+화면읽기와 달리 이건 **실제로 답장이 되고**, 들어온 메시지를 **백그라운드로(앱 전환 없이)**
+읽는다 — 카톡을 포그라운드로 올리지 않는다. 이 도구들은 기본 등록된다. 번들 스킬 `kakao_read`가
+안 읽은 카톡 알림을 요약하고, 원하면 인라인 답장을 보낸다 — "카톡 요약 / 카톡 뭐 왔어"의 기본 경로다.
 
 셋업:
 
@@ -241,8 +241,8 @@ adb 경로와 달리 이건 **실제로 답장이 된다** — (앱 UI가 아니
 #        gradle assembleDebug            # 또는 Android Studio 로 열기
 # 2. 설치 후 한 번 실행하고 "알림 접근" 권한 부여(앱에 버튼 있음)
 # 3. Termux 로 돌아와서:
-USIX_COMPANION=1 usix-termux doctor          # 브리지 127.0.0.1:8760 ✅
-USIX_COMPANION=1 usix-termux                 # notif_list / notif_reply 등록됨
+usix-termux doctor          # 브리지 127.0.0.1:8760 ✅
+usix-termux                 # notif_list / notif_reply 기본 등록됨
 ```
 
 정직한 한계:

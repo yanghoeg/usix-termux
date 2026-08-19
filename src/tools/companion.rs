@@ -1,6 +1,6 @@
 // TOOLS — usix-companion(안드로이드 알림 브리지) 연동.
 // 컴패니언 앱의 NotificationListenerService 가 127.0.0.1:8760 에 작은 HTTP 브리지를 열고,
-// 여기서 다른 앱(카톡·라인 등)의 알림을 읽거나 인라인 답장을 쏜다. USIX_COMPANION 설정 시에만 등록.
+// 여기서 다른 앱(카톡·라인 등)의 알림을 읽거나 인라인 답장을 쏜다. kakao_read 스킬의 기본 경로라 항상 등록.
 use crate::ports::{ApprovalClass, Tool};
 use anyhow::{anyhow, Result};
 use serde_json::{json, Value};

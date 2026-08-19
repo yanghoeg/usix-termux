@@ -65,7 +65,7 @@ tools/
   comms.rs         sms_send, call, reminder                (Mutating, approval required)
   shell.rs         read_file, list_dir (ReadOnly) · shell, write_file (Mutating)
   ui.rs            ui_dump (ReadOnly) · app_open (Mutating)  — adb, opt-in USIX_UI
-  companion.rs     notif_list (ReadOnly) · notif_reply (Mutating) — bridge, opt-in USIX_COMPANION
+  companion.rs     notif_list (ReadOnly) · notif_reply (Mutating) — bridge, default (kakao_read)
 tui.rs             inline ratatui input box + streamed, plain-stdout transcript
   editor.rs        UTF-8 line editor (multiline, history, word keys)
   markdown.rs      markdown → styled lines (headings, code blocks, lists, inline)
@@ -182,7 +182,7 @@ Experimental phone-UI tools, registered only when `USIX_UI` is set (see below):
 | `ui_dump`   | ReadOnly | automatic |
 | `app_open`  | Mutating | `y/N`     |
 
-Companion notification tools, registered only when `USIX_COMPANION` is set (see below):
+Companion notification tools (registered by default; see below):
 
 | Tool          | Class    | Approval  |
 | ------------- | -------- | --------- |
@@ -233,10 +233,10 @@ app's inline **RemoteInput** reply. It exposes a loopback-only HTTP bridge on
 - `notif_list` (ReadOnly) — recent notifications (`pkg`, `title`, `text`, `key`, `canReply`)
 - `notif_reply` (Mutating, `y/N`) — send an inline reply to a notification `key`
 
-Unlike the adb path, this **can actually reply** — it's the first cut that closes the
-KakaoTalk read→reply loop (via notifications, not the app UI). Registered only when
-`USIX_COMPANION` is set. The bundled `kakao_notify` skill summarizes KakaoTalk notifications
-and, on request, replies.
+Unlike screen-reading, this **can actually reply** — and it reads incoming messages in the
+**background with no app switch** (no foregrounding KakaoTalk). These tools are registered
+by default. The bundled `kakao_read` skill summarizes unread KakaoTalk notifications and, on
+request, sends an inline reply — this is the default path for "카톡 요약 / 카톡 뭐 왔어".
 
 Setup:
 
@@ -249,8 +249,8 @@ Setup:
 #        gradle assembleDebug            # or open in Android Studio
 # 2. Install it, launch once, and grant "Notification access" (the app has a button for it)
 # 3. Back in Termux:
-USIX_COMPANION=1 usix-termux doctor          # bridge 127.0.0.1:8760 ✅
-USIX_COMPANION=1 usix-termux                 # notif_list / notif_reply now registered
+usix-termux doctor          # bridge 127.0.0.1:8760 ✅
+usix-termux                 # notif_list / notif_reply registered by default
 ```
 
 Honest caveats:
