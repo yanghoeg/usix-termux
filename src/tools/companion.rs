@@ -1,22 +1,11 @@
 // TOOLS — usix-companion(안드로이드 알림 브리지) 연동.
 // 컴패니언 앱의 NotificationListenerService 가 127.0.0.1:8760 에 작은 HTTP 브리지를 열고,
 // 여기서 다른 앱(카톡·라인 등)의 알림을 읽거나 인라인 답장을 쏜다. USIX_COMPANION 설정 시에만 등록.
+// HTTP·토큰·타임아웃은 bridge.rs 공용.
+use super::bridge;
 use crate::ports::{ApprovalClass, Tool};
 use anyhow::{anyhow, Result};
 use serde_json::{json, Value};
-
-const COMPANION_PORT: u16 = 8760;
-
-fn url(path: &str) -> String {
-    format!("http://127.0.0.1:{COMPANION_PORT}{path}")
-}
-
-/// 브리지 무응답(앱 미설치/미실행/권한 없음) → 모델·사용자에게 원인을 안내.
-fn bridge_hint(e: impl std::fmt::Display) -> anyhow::Error {
-    anyhow!(
-        "companion 브리지 무응답 — usix-companion 앱을 설치하고 '알림 접근' 권한을 켠 뒤 실행했는지 확인하라. ({e})"
-    )
-}
 
 pub struct NotifList;
 impl Tool for NotifList {
@@ -38,10 +27,7 @@ impl Tool for NotifList {
         ApprovalClass::ReadOnly
     }
     fn run(&self, args: &Value) -> Result<String> {
-        let resp = ureq::get(&url("/notifications"))
-            .call()
-            .map_err(bridge_hint)?;
-        let body: Value = resp.into_json().map_err(|e| anyhow!("응답 파싱 실패: {e}"))?;
+        let body = bridge::get("/notifications")?;
         let Some(pkg) = args.get("package").and_then(|v| v.as_str()) else {
             return Ok(body.to_string());
         };
@@ -86,10 +72,7 @@ impl Tool for NotifReply {
             .get("text")
             .and_then(|v| v.as_str())
             .ok_or_else(|| anyhow!("필수 인자 누락: text"))?;
-        let resp = ureq::post(&url("/reply"))
-            .send_json(json!({ "key": key, "text": text }))
-            .map_err(bridge_hint)?;
-        let body: Value = resp.into_json().map_err(|e| anyhow!("응답 파싱 실패: {e}"))?;
+        let body = bridge::post("/reply", json!({ "key": key, "text": text }))?;
         if body.get("ok").and_then(|v| v.as_bool()) == Some(true) {
             Ok("답장 전송됨".into())
         } else {

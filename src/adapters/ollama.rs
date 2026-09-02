@@ -27,7 +27,8 @@ impl Llm for Ollama {
             // tool 선택 결정성 ↑ (소형 모델의 무작위 오선택 완화)
             "options": { "temperature": 0 },
         });
-        let resp: Value = ureq::post(&self.url)
+        let resp: Value = super::http_agent()
+            .post(&self.url)
             .send_json(body)
             .map_err(|e| anyhow!("ollama 요청 실패 (서버 실행 중? ollama-serve start): {e}"))?
             .into_json()

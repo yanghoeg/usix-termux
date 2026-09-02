@@ -18,6 +18,7 @@ fn main() -> anyhow::Result<()> {
     match args.first().map(String::as_str) {
         Some("setup") => bootstrap::setup()?,
         Some("doctor") => bootstrap::doctor()?,
+        Some("pair") => bootstrap::pair(args.get(1).map(String::as_str))?,
         Some("-c") => one_shot(&args[1..].join(" "))?,
         Some("chat") | None => {
             // "시작한 쪽이 정리한다" — 이번 실행이 서버를 띄웠을 때만 나갈 때 내린다.
@@ -97,6 +98,7 @@ fn print_help() {
          usix-termux            interactive TUI\n  \
          usix-termux setup      install backend + start server (+pull model on ollama)\n  \
          usix-termux doctor     check prerequisites\n  \
+         usix-termux pair [tok] save the usix-companion bridge token (clipboard/stdin if omitted)\n  \
          usix-termux -c \"query\"  one-shot query (non-interactive)\n\n\
          Environment:\n  \
          USIX_BACKEND  llama (default) | ollama\n  \

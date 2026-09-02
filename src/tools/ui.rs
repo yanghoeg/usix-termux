@@ -1,44 +1,21 @@
 // TOOLS — 폰 UI 컨트롤(실험적). usix-companion 앱의 접근성 서비스를 통해 루트·adb 없이 화면을 읽고
 // 탭·입력한다. 8760 브리지의 /screen·/tap·/type·/back·/open 을 친다. USIX_UI 설정 시에만 등록된다.
 // 읽기(ui_dump)는 자동, 나머지(탭·입력·앱 실행)는 화면이 바뀌므로 승인 대상.
+// HTTP·토큰·타임아웃은 bridge.rs 공용.
+use super::bridge::{get as bridge_get, post as bridge_post};
 use crate::ports::{ApprovalClass, Tool};
 use anyhow::{anyhow, Result};
 use serde_json::{json, Value};
 
-const COMPANION_PORT: u16 = 8760;
 // 화면 요소가 많으면 소형 모델 컨텍스트 보호를 위해 상한을 둔다.
 const MAX_NODES: usize = 80;
-
-fn url(path: &str) -> String {
-    format!("http://127.0.0.1:{COMPANION_PORT}{path}")
-}
+// 탭 좌표 상한(px) — 어떤 폰·태블릿 해상도보다 넉넉. 음수·거대값은 모델 환각이므로 서버 전에 거른다.
+const MAX_COORD: i64 = 10_000;
 
 fn required_str<'a>(args: &'a Value, key: &str) -> Result<&'a str> {
     args.get(key)
         .and_then(|v| v.as_str())
         .ok_or_else(|| anyhow!("필수 인자 누락: {key}"))
-}
-
-/// 브리지 무응답(앱 미설치/미실행) → 원인 안내. 503 은 접근성 권한 꺼짐으로 따로 처리.
-fn bridge_err(e: ureq::Error) -> anyhow::Error {
-    match e {
-        ureq::Error::Status(503, _) => anyhow!(
-            "접근성 서비스 꺼짐 — usix-companion 앱에서 '접근성(화면 제어)' 권한을 켜라."
-        ),
-        other => anyhow!(
-            "companion 브리지 무응답 — usix-companion 앱을 설치·실행했는지 확인하라. ({other})"
-        ),
-    }
-}
-
-fn bridge_get(path: &str) -> Result<Value> {
-    let resp = ureq::get(&url(path)).call().map_err(bridge_err)?;
-    resp.into_json().map_err(|e| anyhow!("응답 파싱 실패: {e}"))
-}
-
-fn bridge_post(path: &str, body: Value) -> Result<Value> {
-    let resp = ureq::post(&url(path)).send_json(body).map_err(bridge_err)?;
-    resp.into_json().map_err(|e| anyhow!("응답 파싱 실패: {e}"))
 }
 
 /// {ok:bool} 응답을 성공 메시지 또는 에러로 변환.
@@ -160,6 +137,9 @@ impl Tool for UiTap {
             .get("y")
             .and_then(|v| v.as_i64())
             .ok_or_else(|| anyhow!("y 는 정수여야 함"))?;
+        if !(0..=MAX_COORD).contains(&x) || !(0..=MAX_COORD).contains(&y) {
+            return Err(anyhow!("좌표 범위 밖: ({x},{y}) — ui_dump 로 얻은 위치를 써라."));
+        }
         let body = bridge_post("/tap", json!({ "x": x, "y": y }))?;
         expect_ok(&body, format!("탭 → ({x},{y})"), "탭 실패")
     }
@@ -231,6 +211,14 @@ mod tests {
     fn ui_tap_requires_integers() {
         assert!(UiTap.run(&json!({ "x": "5; reboot", "y": 10 })).is_err());
         assert!(UiTap.run(&json!({ "y": 10 })).is_err());
+    }
+
+    #[test]
+    fn ui_tap_rejects_out_of_range() {
+        for (x, y) in [(-1, 10), (10, -1), (MAX_COORD + 1, 10), (10, i64::MAX)] {
+            let e = UiTap.run(&json!({ "x": x, "y": y })).unwrap_err().to_string();
+            assert!(e.contains("좌표 범위 밖"), "범위 밖 좌표가 통과됨: ({x},{y}) → {e}");
+        }
     }
 
     #[test]

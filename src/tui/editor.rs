@@ -96,15 +96,16 @@ impl Editor {
         if self.history.is_empty() {
             return;
         }
-        match self.hist_cursor {
+        let i = match self.hist_cursor {
             None => {
                 self.stash = Some(self.buffer.clone());
-                self.hist_cursor = Some(self.history.len() - 1);
+                self.history.len() - 1
             }
             Some(0) => return,
-            Some(i) => self.hist_cursor = Some(i - 1),
-        }
-        self.buffer = self.history[self.hist_cursor.unwrap()].clone();
+            Some(i) => i - 1,
+        };
+        self.hist_cursor = Some(i);
+        self.buffer = self.history[i].clone();
         self.cursor = self.buffer.len();
     }
 

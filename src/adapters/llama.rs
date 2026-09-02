@@ -29,7 +29,8 @@ impl Llm for LlamaCpp {
             body["tools"] = json!(tools);
             body["tool_choice"] = json!("auto");
         }
-        let resp: Value = ureq::post(&self.url)
+        let resp: Value = super::http_agent()
+            .post(&self.url)
             .send_json(body)
             .map_err(|e| anyhow!("llama-server 요청 실패 (서버 실행 중? usix-termux setup): {e}"))?
             .into_json()
@@ -61,9 +62,12 @@ impl Llm for LlamaCpp {
             body["tools"] = json!(tools);
             body["tool_choice"] = json!("auto");
         }
-        let resp = ureq::post(&self.url)
+        let resp = super::http_agent()
+            .post(&self.url)
             .send_json(body)
-            .map_err(|e| anyhow!("llama-server 요청 실패 (서버 실행 중? usix-termux setup): {e}"))?;
+            .map_err(|e| {
+                anyhow!("llama-server 요청 실패 (서버 실행 중? usix-termux setup): {e}")
+            })?;
         let reader = std::io::BufReader::new(resp.into_reader());
 
         let mut content = String::new();
