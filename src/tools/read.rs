@@ -24,8 +24,25 @@ impl Tool for SmsList {
         ApprovalClass::ReadOnly
     }
     fn run(&self, args: &Value) -> Result<String> {
-        let limit = args.get("limit").and_then(|v| v.as_i64()).unwrap_or(10);
-        termux::run("termux-sms-list", &["-l", &limit.to_string()])
+        // 소형 모델 컨텍스트가 4096뿐이라, 긴 재난문자 여러 건이 통째로 들어오면 다음
+        // 요청이 400(exceeds context)으로 깨진다. 개수와 본문 길이를 함께 상한 둔다.
+        const MAX_MSGS: i64 = 15;
+        const MAX_BODY: usize = 120; // 문자(char) 기준 — 한글 바이트 슬라이싱 방지.
+        let want = args.get("limit").and_then(|v| v.as_i64()).unwrap_or(10);
+        let limit = want.clamp(1, MAX_MSGS);
+        let raw = termux::run("termux-sms-list", &["-l", &limit.to_string()])?;
+        let Ok(Value::Array(mut items)) = serde_json::from_str::<Value>(&raw) else {
+            return Ok(raw);
+        };
+        for m in items.iter_mut() {
+            if let Some(body) = m.get("body").and_then(|v| v.as_str()) {
+                if body.chars().count() > MAX_BODY {
+                    let cut: String = body.chars().take(MAX_BODY).collect();
+                    m["body"] = json!(format!("{cut}…"));
+                }
+            }
+        }
+        Ok(serde_json::to_string(&items)?)
     }
 }
 

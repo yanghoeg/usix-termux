@@ -182,14 +182,16 @@ pub fn ensure_llama_serve() -> Result<bool> {
         "starting llama-server ({}) — {model}",
         if gpu { "GPU/OpenCL" } else { "CPU" }
     );
-    // --parallel 1: 슬롯 1개만. 기본값 4는 KV 캐시를 4배(4×4096=16384토큰) 잡아
+    // --parallel 1: 슬롯 1개만. 기본값 4는 KV 캐시를 4배(4×8192=32768토큰) 잡아
     // 메모리 압박으로 lmkd 가 X11 서버를 OOM 킬 하던 원인이었다. 1인용 비서엔 1슬롯이면 충분.
+    // -c 8192: 문자/알림 여러 건이 한 툴결과로 들어와도 4096 을 넘겨 400(exceeds context)
+    // 나던 걸 막는다. 2B 는 KV 캐시가 작아 1슬롯이면 이 컨텍스트도 감당된다.
     // --jinja: GGUF 내장 챗 템플릿 사용(Hammer 등 도구모델이 도구호출을 제대로 내려면 필요).
     let launch = if gpu {
         // env: nohup 뒤에서 `VAR=..` 는 명령 이름으로 오해되므로 env 로 넘긴다.
-        format!("env LLAMA_GPU_BIN=llama-server llama-gpu -m '{model}' --host 127.0.0.1 --port {port} -c 4096 --parallel 1 --jinja")
+        format!("env LLAMA_GPU_BIN=llama-server llama-gpu -m '{model}' --host 127.0.0.1 --port {port} -c 8192 --parallel 1 --jinja")
     } else {
-        format!("llama-server -m '{model}' --host 127.0.0.1 --port {port} -c 4096 --parallel 1 --jinja")
+        format!("llama-server -m '{model}' --host 127.0.0.1 --port {port} -c 8192 --parallel 1 --jinja")
     };
     Command::new("sh")
         .arg("-c")
