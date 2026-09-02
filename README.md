@@ -248,8 +248,10 @@ Setup:
 #        git clone https://github.com/yanghoeg/usix-companion && cd usix-companion
 #        gradle assembleDebug            # or open in Android Studio
 # 2. Install it, launch once, and grant "Notification access" (the app has a button for it)
-# 3. Back in Termux:
-usix-termux doctor          # bridge 127.0.0.1:8760 ✅
+# 3. Pair once: tap "토큰 복사" (copy token) in the app, then in Termux:
+usix-termux pair            # reads the clipboard, or paste when prompted
+# 4. Back in Termux:
+usix-termux doctor          # bridge 127.0.0.1:8760 ✅ · token paired ✅
 usix-termux                 # notif_list / notif_reply registered by default
 ```
 
@@ -258,8 +260,11 @@ Honest caveats:
 - **Notifications only.** It sees what a notification carries (sender + latest line) and can
   reply *only* if the app attached a RemoteInput action (`canReply`). It cannot read full
   chat history — that still needs root.
-- **Same-device loopback.** The bridge binds `127.0.0.1` only; the APK must be running (the
-  listener service keeps it alive) for the tools to respond.
+- **Same-device loopback, token-gated.** The bridge binds `127.0.0.1` only; the APK must be
+  running (the listener service keeps it alive) for the tools to respond. Android apps share
+  one loopback interface, so binding alone can't tell callers apart — every request carries a
+  bearer token the app generates on first launch (`~/.usix/companion_token` on the Termux
+  side, written by `usix-termux pair`). Requests without it get `401`; only `/health` is open.
 - **No Gradle wrapper committed.** The usix-companion repo omits the wrapper jar; CI builds
   with a pinned Gradle version, and local builds use a system `gradle` or Android Studio.
 

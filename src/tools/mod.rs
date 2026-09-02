@@ -1,3 +1,4 @@
+pub mod bridge;
 pub mod comms;
 pub mod companion;
 pub mod read;

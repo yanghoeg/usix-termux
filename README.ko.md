@@ -240,8 +240,10 @@ HTTP 브리지를 `127.0.0.1:8760`에 열고, Termux 에이전트가 두 도구�
 #        git clone https://github.com/yanghoeg/usix-companion && cd usix-companion
 #        gradle assembleDebug            # 또는 Android Studio 로 열기
 # 2. 설치 후 한 번 실행하고 "알림 접근" 권한 부여(앱에 버튼 있음)
-# 3. Termux 로 돌아와서:
-usix-termux doctor          # 브리지 127.0.0.1:8760 ✅
+# 3. 1회 페어링: 앱에서 "토큰 복사" 를 누른 뒤 Termux 에서:
+usix-termux pair            # 클립보드에서 읽음(없으면 붙여넣기 프롬프트)
+# 4. Termux 로 돌아와서:
+usix-termux doctor          # 브리지 127.0.0.1:8760 ✅ · 토큰 페어링 ✅
 usix-termux                 # notif_list / notif_reply 기본 등록됨
 ```
 
@@ -249,8 +251,11 @@ usix-termux                 # notif_list / notif_reply 기본 등록됨
 
 - **알림만.** 알림에 실린 것(보낸 사람 + 최신 한 줄)만 보고, 앱이 RemoteInput 답장 액션을
   붙인 경우(`canReply`)에만 답장할 수 있다. 전체 대화 기록은 여전히 루트 필요.
-- **같은 기기 루프백.** 브리지는 `127.0.0.1`에만 바인딩하고, 도구가 응답하려면 APK가 실행
-  중이어야 한다(리스너 서비스가 살려 둔다).
+- **같은 기기 루프백 + 토큰.** 브리지는 `127.0.0.1`에만 바인딩하고, 도구가 응답하려면 APK가
+  실행 중이어야 한다(리스너 서비스가 살려 둔다). 안드로이드는 모든 앱이 루프백을 공유하므로
+  바인딩만으론 호출자를 못 가린다 — 앱이 첫 실행 때 만든 토큰을 매 요청 Bearer 로 보낸다
+  (Termux 쪽은 `usix-termux pair` 가 `~/.usix/companion_token` 에 저장). 토큰 없으면 `401`,
+  `/health` 만 열려 있다.
 - **Gradle 래퍼 미커밋.** usix-companion repo는 래퍼 jar를 넣지 않았다 — CI는 고정된 Gradle
   버전으로 빌드하고, 로컬 빌드는 시스템 `gradle` 또는 Android Studio 를 쓴다.
 

@@ -5,12 +5,13 @@
 // 조작하게 한다. ui_dump 가 화면 요소에 번호를 매겨 캐시에 저장하고, ui_tap 은 그 번호를,
 // ui_tap_text 는 보이는 텍스트를 받는다. 탭·입력·뒤로 뒤엔 화면을 자동 재읽기(re-dump)해 결과로
 // 돌려준다 → 모델이 "쏘고 잊는" 대신 즉시 최신 화면을 보고 다음 수를 정한다(행동 후 검증).
+// HTTP·토큰·타임아웃은 bridge.rs 공용.
+use super::bridge::{get as bridge_get, post as bridge_post};
 use crate::ports::{ApprovalClass, Tool};
 use anyhow::{anyhow, Result};
 use serde_json::{json, Value};
 use std::sync::{Mutex, OnceLock};
 
-const COMPANION_PORT: u16 = 8760;
 // 화면 요소가 많으면 소형 모델 컨텍스트 보호를 위해 상한을 둔다.
 const MAX_NODES: usize = 80;
 
@@ -29,36 +30,10 @@ fn last() -> &'static Mutex<Vec<Elem>> {
     LAST.get_or_init(|| Mutex::new(Vec::new()))
 }
 
-fn url(path: &str) -> String {
-    format!("http://127.0.0.1:{COMPANION_PORT}{path}")
-}
-
 fn required_str<'a>(args: &'a Value, key: &str) -> Result<&'a str> {
     args.get(key)
         .and_then(|v| v.as_str())
         .ok_or_else(|| anyhow!("필수 인자 누락: {key}"))
-}
-
-/// 브리지 무응답(앱 미설치/미실행) → 원인 안내. 503 은 접근성 권한 꺼짐으로 따로 처리.
-fn bridge_err(e: ureq::Error) -> anyhow::Error {
-    match e {
-        ureq::Error::Status(503, _) => anyhow!(
-            "접근성 서비스 꺼짐 — usix-companion 앱에서 '접근성(화면 제어)' 권한을 켜라."
-        ),
-        other => anyhow!(
-            "companion 브리지 무응답 — usix-companion 앱을 설치·실행했는지 확인하라. ({other})"
-        ),
-    }
-}
-
-fn bridge_get(path: &str) -> Result<Value> {
-    let resp = ureq::get(&url(path)).call().map_err(bridge_err)?;
-    resp.into_json().map_err(|e| anyhow!("응답 파싱 실패: {e}"))
-}
-
-fn bridge_post(path: &str, body: Value) -> Result<Value> {
-    let resp = ureq::post(&url(path)).send_json(body).map_err(bridge_err)?;
-    resp.into_json().map_err(|e| anyhow!("응답 파싱 실패: {e}"))
 }
 
 /// {ok:bool} 응답을 성공 메시지 또는 에러로 변환.

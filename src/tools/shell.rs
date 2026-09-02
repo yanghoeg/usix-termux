@@ -15,7 +15,10 @@ fn required_str<'a>(args: &'a Value, key: &str) -> Result<&'a str> {
 const SHELL_TIMEOUT_SECS: &str = "120";
 // 모델 컨텍스트 보호 — 셸 출력이 길면 자른다.
 const MAX_OUTPUT: usize = 8000;
-// 승인과 무관한 방어선 — 회복 불가 파괴 명령은 승인해도 실행하지 않는다. 소문자 비교.
+// 승인과 무관한 방어선 — 회복 불가 파괴 명령은 승인해도 실행하지 않는다.
+// 소문자·공백 정규화 후 부분문자열 비교. 우회는 쉽다(`find / -delete`, `curl x|sh` 등) —
+// 이건 흔한 사고를 막는 걸림돌일 뿐 보안 경계가 아니다. 실제 방어선은 승인 프롬프트에 표시되는
+// 명령 원문을 사람이 읽고 y/N 하는 것이다.
 const BLOCKED: &[&str] = &[
     ":(){:|:&};:",
     ":(){ :|:& };:",
@@ -29,6 +32,11 @@ const BLOCKED: &[&str] = &[
     "of=/dev/",
     "> /dev/",
 ];
+
+/// BLOCKED 대조용 — 소문자 + 연속 공백을 한 칸으로(`rm   -rf   /` 같은 변형 흡수).
+fn normalize(cmd: &str) -> String {
+    cmd.to_lowercase().split_whitespace().collect::<Vec<_>>().join(" ")
+}
 
 fn truncate(s: &str) -> String {
     if s.chars().count() <= MAX_OUTPUT {
@@ -61,7 +69,7 @@ impl Tool for Shell {
     }
     fn run(&self, args: &Value) -> Result<String> {
         let cmd = required_str(args, "command")?;
-        let low = cmd.to_lowercase();
+        let low = normalize(cmd);
         if let Some(p) = BLOCKED.iter().find(|p| low.contains(**p)) {
             return Err(anyhow!("차단됨: 파괴적 명령 '{p}' 은 실행하지 않는다."));
         }
@@ -95,6 +103,9 @@ impl Tool for Shell {
 }
 
 const MAX_READ_LINES: usize = 1500;
+// read_file 은 승인 없이 자동 실행되므로 크기 상한이 필요하다 — 전체를 메모리에 올린 뒤
+// 줄을 자르는 구조라, 모델이 거대·바이너리 파일을 찍으면 폰 lmkd 에 죽는다.
+const MAX_READ_BYTES: u64 = 2 * 1024 * 1024;
 
 fn render_lines(c: &str, offset: usize, limit: usize) -> String {
     let lines: Vec<&str> = c.lines().collect();
@@ -145,6 +156,16 @@ impl Tool for ReadFile {
             .map(|v| v as usize)
             .unwrap_or(MAX_READ_LINES)
             .min(MAX_READ_LINES);
+        let size = std::fs::metadata(path)
+            .map_err(|e| anyhow!("{path} 읽기 실패: {e}"))?
+            .len();
+        if size > MAX_READ_BYTES {
+            return Err(anyhow!(
+                "{path} 는 너무 큼 ({} KiB > {} KiB) — shell 도구로 head/sed/grep 을 써서 필요한 부분만 읽어라.",
+                size / 1024,
+                MAX_READ_BYTES / 1024
+            ));
+        }
         let content = std::fs::read_to_string(path).map_err(|e| anyhow!("{path} 읽기 실패: {e}"))?;
         Ok(render_lines(&content, offset, limit))
     }
@@ -227,10 +248,24 @@ mod tests {
 
     #[test]
     fn shell_blocks_destructive() {
-        for bad in [":(){:|:&};:", "rm -rf /", "sudo rm -fr ~"] {
+        for bad in [":(){:|:&};:", "rm -rf /", "sudo rm -fr ~", "RM  -rf   /*", "rm\t-rf\t/"] {
             let r = Shell.run(&json!({ "command": bad }));
             assert!(r.is_err(), "파괴 명령이 통과됨: {bad}");
         }
+    }
+
+    #[test]
+    fn read_rejects_oversized() {
+        let dir = std::env::temp_dir().join(format!("usix_shell_big_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("big.txt");
+        std::fs::write(&path, vec![b'x'; (MAX_READ_BYTES + 1) as usize]).unwrap();
+        let e = ReadFile
+            .run(&json!({ "path": path.to_string_lossy() }))
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("너무 큼"), "크기 상한이 안 걸림: {e}");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
