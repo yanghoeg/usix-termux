@@ -579,73 +579,165 @@ fn footer_line(
 // ── 시작 배너 (병아리 + 컨텍스트) ─────────────────────────────────────────
 
 fn mascot_rows() -> Vec<Vec<Span<'static>>> {
+    // usix mascot.rs 이식 — 통통한 병아리(데스크톱 아이콘의 터미널 버전). 열린 옆구리
+    // `/  \`·`|  |` 와 배·날개 행 `(           )` 로 6줄 축약본보다 몸통을 살렸다.
     let white = Style::default().fg(Color::White);
     let white_b = white.add_modifier(Modifier::BOLD);
+    let pink = Style::default().fg(PINK);
+    let beak = Style::default().fg(YELLOW).add_modifier(Modifier::BOLD);
+    let feet = Style::default().fg(BROWN);
     vec![
-        vec![Span::styled("      ,;,", white)],
+        vec![Span::styled("      ,;;,", white)],
         vec![Span::styled("   .-'```'-.", white)],
         vec![
-            Span::styled("  (  ", white),
+            Span::styled("  /  ", white),
             Span::styled("o   o", white_b),
-            Span::styled("  )", white),
+            Span::styled("  \\", white),
         ],
         vec![
-            Span::styled("  ( ", white),
-            Span::styled(".", Style::default().fg(PINK)),
+            Span::styled(" |  ", white),
+            Span::styled(".", pink),
             Span::styled("  ", white),
-            Span::styled("v", Style::default().fg(YELLOW).add_modifier(Modifier::BOLD)),
+            Span::styled("v", beak),
             Span::styled("  ", white),
-            Span::styled(".", Style::default().fg(PINK)),
-            Span::styled(" )", white),
+            Span::styled(".", pink),
+            Span::styled("  |", white),
         ],
+        vec![Span::styled(" (           )", white)],
         vec![Span::styled("   '-.___.-'", white)],
-        vec![Span::styled("     w   w", Style::default().fg(BROWN))],
+        vec![Span::styled("     w   w", feet)],
     ]
 }
 
+/// 마스코트 한 줄의 고정 표시폭(패딩 포함). 아트는 ASCII 전용이라 byte == column.
+const ART_W: usize = 16;
+/// 마스코트와 copy 사이 간격.
+const MASCOT_GAP: &str = "  ";
+/// 좌우 배치를 유지하기 위한 copy 최소폭 — 이보다 좁으면 병아리 아래에 쌓는다.
+const SIDE_MIN_COPY_W: usize = 32;
+
+/// usix banner.rs 이식 — 한 줄 dim 컨텍스트 + 폭에 따른 좌우/상하 반응형 배치.
+/// copy(로고·컨텍스트)는 상단 정렬해 병아리 첫 두 행에 나란히 놓고, 남는 행은 마스코트만.
 fn banner_lines(model_label: &str) -> Vec<Line<'static>> {
     let cwd = std::env::current_dir()
         .ok()
         .and_then(|p| p.file_name().map(|s| s.to_string_lossy().into_owned()))
         .unwrap_or_else(|| "?".into());
+    let branch = read_git_branch().unwrap_or_else(|| "(no git)".into());
 
-    let ctx: Vec<Vec<Span<'static>>> = vec![
-        vec![
+    let cols = crossterm::terminal::size()
+        .map_or(80, |(c, _)| c as usize)
+        .max(1);
+    let gap = UnicodeWidthStr::width(MASCOT_GAP);
+    let show_mascot = cols >= ART_W;
+    let side_by_side = show_mascot && cols >= ART_W + gap + SIDE_MIN_COPY_W;
+    let copy_width = if side_by_side { cols - ART_W - gap } else { cols };
+
+    let copy = copy_lines(&cwd, &branch, model_label, copy_width);
+    if !show_mascot {
+        return copy;
+    }
+
+    let mascot = mascot_rows();
+    let mut out = Vec::new();
+    if side_by_side {
+        for (i, row) in mascot.iter().enumerate() {
+            let mut line = mascot_line(row);
+            if let Some(c) = copy.get(i) {
+                line.spans.push(Span::raw(MASCOT_GAP));
+                line.spans.extend(c.spans.iter().cloned());
+            }
+            out.push(line);
+        }
+    } else {
+        out.extend(mascot.iter().map(|r| mascot_line(r)));
+        out.extend(copy);
+    }
+    out
+}
+
+/// 마스코트 한 행을 `ART_W` 표시폭으로 우측 패딩한 Line.
+fn mascot_line(row: &[Span<'static>]) -> Line<'static> {
+    let w: usize = row
+        .iter()
+        .map(|s| UnicodeWidthStr::width(s.content.as_ref()))
+        .sum();
+    let mut spans = row.to_vec();
+    if w < ART_W {
+        spans.push(Span::raw(" ".repeat(ART_W - w)));
+    }
+    Line::from(spans)
+}
+
+/// 로고 + 한 줄 컨텍스트를 copy_width 안에 맞춰 반환.
+fn copy_lines(cwd: &str, branch: &str, model: &str, width: usize) -> Vec<Line<'static>> {
+    const LOGO: &str = "✻ usix-termux v0.0.1";
+    let logo = if UnicodeWidthStr::width(LOGO) <= width {
+        Line::from(vec![
             Span::styled("✻ ", Style::default().fg(ACCENT)),
             Span::styled(
                 "usix-termux",
                 Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
             ),
             Span::styled(" v0.0.1", Style::default().fg(MUTED)),
-        ],
-        vec![],
-        vec![
-            Span::styled("cwd    ", Style::default().fg(MUTED)),
-            Span::styled(cwd, Style::default().fg(Color::White)),
-        ],
-        vec![],
-        vec![
-            Span::styled("model  ", Style::default().fg(MUTED)),
-            Span::styled(model_label.to_string(), Style::default().fg(Color::White)),
-        ],
-        vec![],
-    ];
+        ])
+    } else {
+        Line::from(Span::styled(
+            clamp_cells(LOGO, width),
+            Style::default().fg(ACCENT),
+        ))
+    };
+    let ctx = context_line(cwd, branch, model, width);
+    vec![logo, Line::from(Span::styled(ctx, Style::default().fg(MUTED)))]
+}
 
-    const ART_W: usize = 16;
-    let mascot = mascot_rows();
-    let mut out = Vec::new();
-    for (i, row) in mascot.iter().enumerate() {
-        let mut spans: Vec<Span<'static>> = vec![Span::raw(" ")];
-        let w: usize = row.iter().map(|s| s.content.chars().count()).sum();
-        spans.extend(row.iter().cloned());
-        if w < ART_W {
-            spans.push(Span::raw(" ".repeat(ART_W - w)));
-        }
-        spans.push(Span::raw("   "));
-        if let Some(c) = ctx.get(i) {
-            spans.extend(c.iter().cloned());
-        }
-        out.push(Line::from(spans));
+/// `cwd X · branch Y · model Z` 한 줄 — 좁을수록 라벨을 점진 축약하고 값은 tail 절단.
+/// model 이 termux 핵심 값이라 값 예산을 가장 크게 준다(나머지를 cwd·branch 로 3:2).
+fn context_line(cwd: &str, branch: &str, model: &str, max_width: usize) -> String {
+    let layouts = [
+        ("cwd ", " · branch ", " · model "),
+        ("cwd ", " · br ", " · md "),
+        ("c ", " · b ", " · m "),
+    ];
+    let label_w = |(a, b, c): &(&str, &str, &str)| {
+        UnicodeWidthStr::width(*a) + UnicodeWidthStr::width(*b) + UnicodeWidthStr::width(*c)
+    };
+    let labels = layouts
+        .iter()
+        .find(|l| label_w(l) + 3 <= max_width)
+        .copied()
+        .unwrap_or(layouts[2]);
+    let (l_cwd, l_branch, l_model) = labels;
+
+    let values = max_width.saturating_sub(label_w(&labels));
+    let model_w = (values * 2 / 5).max(usize::from(values > 0));
+    let rest = values.saturating_sub(model_w);
+    let cwd_w = (rest * 3 / 5).max(usize::from(rest > 0));
+    let branch_w = rest.saturating_sub(cwd_w);
+
+    let fit = |s: &str, w: usize| if w == 0 { String::new() } else { clamp_cells(s, w) };
+    let line = format!(
+        "{l_cwd}{}{l_branch}{}{l_model}{}",
+        fit(cwd, cwd_w),
+        fit(branch, branch_w),
+        fit(model, model_w),
+    );
+    clamp_cells(&line, max_width)
+}
+
+fn read_git_branch() -> Option<String> {
+    let out = Command::new("git")
+        .args(["rev-parse", "--abbrev-ref", "HEAD"])
+        .stdin(Stdio::null())
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
     }
-    out
+    let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    if s.is_empty() {
+        None
+    } else {
+        Some(s)
+    }
 }
