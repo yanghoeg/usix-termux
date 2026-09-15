@@ -21,16 +21,11 @@ fn main() -> anyhow::Result<()> {
         Some("pair") => bootstrap::pair(args.get(1).map(String::as_str))?,
         Some("-c") => one_shot(&args[1..].join(" "))?,
         Some("chat") | None => {
-            // "시작한 쪽이 정리한다" — 이번 실행이 서버를 띄웠을 때만 나갈 때 내린다.
-            let started = bootstrap::ensure_backend_serve()?;
+            let _serve = bootstrap::BackendServeGuard::start()?;
             let llm = backend();
             let registry = Registry::new(tools::default_tools());
             let agent = Agent::new(llm.as_ref(), &registry);
-            let res = tui::run(agent, model_label());
-            if started {
-                bootstrap::stop_backend_serve();
-            }
-            res?;
+            tui::run(agent, model_label())?;
         }
         Some("-h") | Some("--help") => print_help(),
         Some(other) => {
@@ -55,7 +50,7 @@ fn backend() -> Box<dyn Llm> {
 // 현재 백엔드/모델을 짧게 라벨링 — TUI 하단·배너 표기용.
 fn model_label() -> String {
     if std::env::var("USIX_BACKEND").as_deref() == Ok("ollama") {
-        std::env::var("USIX_MODEL").unwrap_or_else(|_| "qwen2.5:1.5b".into())
+        std::env::var("USIX_MODEL").unwrap_or_else(|_| "qwen2.5:1.5b-instruct-q5_K_M".into())
     } else {
         let path = bootstrap::llama_model_path();
         std::path::Path::new(&path)
@@ -67,7 +62,7 @@ fn model_label() -> String {
 
 // 대화형 없이 한 번 질문 — 변경 도구는 안전하게 자동 거부.
 fn one_shot(q: &str) -> anyhow::Result<()> {
-    bootstrap::ensure_backend_serve()?;
+    let _serve = bootstrap::BackendServeGuard::start()?;
     let llm = backend();
     let registry = Registry::new(tools::default_tools());
     let mut agent = Agent::new(llm.as_ref(), &registry);
@@ -80,7 +75,9 @@ fn one_shot(q: &str) -> anyhow::Result<()> {
                 break;
             }
             Turn::NeedApproval { desc } => {
-                eprintln!("[skipped] mutating actions are only approved in interactive TUI: {desc}");
+                eprintln!(
+                    "[skipped] mutating actions are only approved in interactive TUI: {desc}"
+                );
                 agent.approve(false)?;
             }
         }

@@ -60,7 +60,10 @@ impl<'a> Agent<'a> {
     pub fn submit(&mut self, user: &str) {
         // 이번 요청과 관련된 스킬만 골라 system 프롬프트를 재구성한다.
         let relevant = crate::domain::skills::select(&self.skills, user);
-        let content = format!("{SYSTEM_PROMPT}{}", crate::domain::skills::guidance(&relevant));
+        let content = format!(
+            "{SYSTEM_PROMPT}{}",
+            crate::domain::skills::guidance(&relevant)
+        );
         self.messages[0] = json!({ "role": "system", "content": content });
         self.messages
             .push(json!({ "role": "user", "content": user }));
@@ -166,7 +169,14 @@ impl<'a> Agent<'a> {
                     Some(t) => t.run(&args).unwrap_or_else(|e| format!("도구 오류: {e}")),
                     None => format!("알 수 없는 도구: {name}"),
                 };
-                self.push_tool_result(&id, if result.is_empty() { "(완료)".into() } else { result });
+                self.push_tool_result(
+                    &id,
+                    if result.is_empty() {
+                        "(완료)".into()
+                    } else {
+                        result
+                    },
+                );
             } else {
                 // 취소 시엔 모델을 다시 부르지 않는다(호출부가 턴을 끝냄) — 소형 모델이 "실행했다"고
                 // 거짓 보고하던 문제를 원천 차단. 대신 형제 호출까지 모두 취소 응답으로 채워

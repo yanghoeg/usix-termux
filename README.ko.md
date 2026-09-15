@@ -62,7 +62,7 @@ tools/
   read.rs          sms_list, call_log, battery, contacts   (ReadOnly, 자동)
   comms.rs         sms_send, call, reminder                (Mutating, 승인 필요)
   shell.rs         read_file, list_dir (ReadOnly) · shell, write_file (Mutating)
-  ui.rs            ui_dump (ReadOnly) · app_open (Mutating)  — adb, USIX_UI 옵트인
+  ui.rs            ui_dump (ReadOnly) · app_open/ui_tap/ui_tap_text/ui_type/ui_back (Mutating) — 컴패니언 AccessibilityService, 기본 등록
   companion.rs     notif_list (ReadOnly) · notif_reply (Mutating) — 알림 브리지, 기본 등록 (kakao_read)
 tui.rs             인라인 ratatui 입력 박스 + 일반 stdout 스트리밍 대화록
   editor.rs        UTF-8 라인 에디터 (멀티라인·히스토리·단어 편집)
@@ -128,7 +128,7 @@ usix-termux -c "..."   # 한 번 질문 (비대화형; 변경 도구는 자동 �
 # 더 작고 빠른 GGUF
 USIX_MODEL=~/models/qwen2.5-1.5b-instruct-q5_k_m.gguf usix-termux
 # ollama 백엔드
-USIX_BACKEND=ollama USIX_MODEL=qwen2.5:1.5b usix-termux
+USIX_BACKEND=ollama USIX_MODEL=qwen2.5:1.5b-instruct-q5_K_M usix-termux
 ```
 
 ### TUI 단축키
@@ -179,6 +179,9 @@ approval needed: sms_send {"number":"010-1234-5678","text":"10분 늦어"}  [y/N
 | ----------- | -------- | --------- |
 | `ui_dump`   | ReadOnly | 자동      |
 | `app_open`  | Mutating | `y/N`     |
+| `ui_tap`    | Mutating | `y/N`     |
+| `ui_type`   | Mutating | `y/N`     |
+| `ui_back`   | Mutating | `y/N`     |
 
 컴패니언 알림 도구 — 기본 등록(아래 참고):
 
@@ -189,36 +192,37 @@ approval needed: sms_send {"number":"010-1234-5678","text":"10분 늦어"}  [y/N
 
 ## 폰 UI 컨트롤 (실험적)
 
-`termux-api` 를 넘어, **온디바이스 adb**(안드로이드 **무선 디버깅**, 루트 불필요)로 화면을
-읽고 앱을 실행할 수 있다. 카톡·라인 등 **임의 앱을 UI 수준에서** 조종한다.
+`termux-api` 를 넘어, 별도 **[usix-companion](https://github.com/yanghoeg/usix-companion)**
+앱의 Android `AccessibilityService`로 현재 보이는 폰 UI를 읽고 조작할 수 있다. 루트나 adb가
+필요 없고, 카톡·라인 등 **임의 앱의 보이는 흐름을** 조종한다.
 
-셋업(1회; 기기에 따라 재부팅 후 재페어링 필요):
+셋업(1회):
 
 ```bash
-pkg install android-tools
-# 설정 → 개발자 옵션 → 무선 디버깅 → 페어링 코드로 기기 페어링
-adb pair localhost:PAIR_PORT       # 6자리 코드 입력
-adb connect localhost:CONNECT_PORT
-USIX_UI=1 usix-termux doctor        # adb ✅, 기기 연결 ✅
-USIX_UI=1 usix-termux               # UI 도구 등록됨
+# 컴패니언을 설치·실행하고 Android 설정에서 접근성 서비스를 켠다.
+# 컴패니언 앱에서 "토큰 복사"를 누른 뒤 Termux에서:
+usix-termux pair                    # 클립보드에서 읽음(없으면 붙여넣기 프롬프트)
+USIX_UI=1 usix-termux doctor         # 브리지·토큰·접근성 ✅
+USIX_UI=1 usix-termux                # UI 도구 등록됨
 ```
 
-`USIX_UI` 를 켜면 두 도구가 추가된다: `ui_dump`(ReadOnly — `uiautomator` 로 화면 텍스트·
-요소 좌표를 읽음)와 `app_open`(Mutating — 패키지명으로 앱 실행). 번들 스킬 `kakao_read` 가
-이 둘로 카톡을 열어 화면에 보이는 대화를 요약한다.
+`USIX_UI` 를 켜면 다섯 도구가 추가된다: `ui_dump`(ReadOnly — 보이는 텍스트·요소 좌표를
+읽음)와 `app_open`, `ui_tap`, `ui_type`, `ui_back`(Mutating — 앱 열기·보이는 요소 탭·텍스트
+입력·뒤로 가기). 번들 스킬 `kakao_read`가 이 도구들로 카톡을 열어 보이는 대화를 요약하며,
+사용자가 요청한 경우에만 탭·입력을 수행할 수 있다.
 
 정직한 한계:
 
-- **지금은 읽기 전용.** 탭·입력(`ui_tap`/`ui_type`)은 다음 컷 — 현재는 앱을 열고 화면을
-  읽지만 답장은 보내지 못한다.
-- **보이는 것만.** adb 는 `shell` 권한이라 UI 조작·화면 읽기는 되지만 다른 앱의 **비공개
-  DB 는 못 읽는다** — 전체 대화 기록은 여전히 루팅 필요.
+- **보이는 것만.** 접근성 서비스는 현재 UI 계층과 보이는 텍스트를 노출하지만, 다른 앱의
+  **비공개 DB나 전체 대화 기록은 읽지 못한다.**
+- **명시적 승인.** 앱 열기·탭·입력·뒤로 가기는 변경 작업이므로 `y/N` 승인이 필요하다.
+  입력은 현재 포커스된 보이는 필드로 전송된다.
 - **취약함.** UI 레이아웃·좌표는 기기마다 다르고, 소형 로컬 모델은 짧은 정해진 흐름만
   안정적으로 처리한다.
 
 ## 컴패니언 앱 — 알림 & 답장 (실험적)
 
-adb는 *화면*을 읽지만 다른 앱의 알림을 읽거나 인라인 답장을 쏘진 못한다.
+UI 브리지는 *화면*을 읽지만 다른 앱의 알림을 읽거나 인라인 답장을 쏘진 못한다.
 별도 [usix-companion](https://github.com/yanghoeg/usix-companion) 앱(작은 Kotlin `NotificationListenerService`)이 그 둘을 **루트·adb 없이** 해낸다: 들어오는
 알림(카톡·라인 등)을 잡고, 앱이 제공하는 인라인 **RemoteInput** 답장을 보낸다. 루프백 전용
 HTTP 브리지를 `127.0.0.1:8760`에 열고, Termux 에이전트가 두 도구로 이를 부린다:
@@ -226,6 +230,9 @@ HTTP 브리지를 `127.0.0.1:8760`에 열고, Termux 에이전트가 두 도구�
 - `notif_list` (ReadOnly) — 최근 알림(`pkg`·`title`·`text`·`key`·`canReply`)
 - `notif_reply` (Mutating, `y/N`) — 알림 `key`에 인라인 답장
 
+화면읽기와 달리 이건 **실제로 답장이 되고**, 들어온 메시지를 **백그라운드로(앱 전환 없이)**
+읽는다 — 카톡을 포그라운드로 올리지 않는다. 이 도구들은 기본 등록된다. 번들 스킬 `kakao_read`가
+안 읽은 카톡 알림을 요약하고, 원하면 인라인 답장을 보낸다 — "카톡 요약 / 카톡 뭐 왔어"의 기본 경로다.
 화면읽기와 달리 이건 **실제로 답장이 되고**, 들어온 메시지를 **백그라운드로(앱 전환 없이)**
 읽는다 — 카톡을 포그라운드로 올리지 않는다. 이 도구들은 기본 등록된다. 번들 스킬 `kakao_read`가
 안 읽은 카톡 알림을 요약하고, 원하면 인라인 답장을 보낸다 — "카톡 요약 / 카톡 뭐 왔어"의 기본 경로다.
@@ -239,7 +246,8 @@ HTTP 브리지를 `127.0.0.1:8760`에 열고, Termux 에이전트가 두 도구�
 #    - 또는 직접 빌드 (로컬 Gradle 8.10.2 + Android SDK 필요):
 #        git clone https://github.com/yanghoeg/usix-companion && cd usix-companion
 #        gradle assembleDebug            # 또는 Android Studio 로 열기
-# 2. 설치 후 한 번 실행하고 "알림 접근" 권한 부여(앱에 버튼 있음)
+# 2. 설치 후 한 번 실행하고 "알림 접근" 권한을 부여한다. 폰 UI를 쓸 때는
+#    "접근성 접근" 권한도 부여한다(앱에 두 버튼이 있음)
 # 3. 1회 페어링: 앱에서 "토큰 복사" 를 누른 뒤 Termux 에서:
 usix-termux pair            # 클립보드에서 읽음(없으면 붙여넣기 프롬프트)
 # 4. Termux 로 돌아와서:
@@ -281,4 +289,4 @@ approval needed: sms_send {"number":"010-…","text":"7시까지 갈게, 사랑�
 ## 상태
 
 v0 — 백엔드 2종(llama.cpp 기본 / ollama), 읽기 도구 6종 + 변경 도구 5종(승인 게이트),
-그리고 `USIX_UI` 뒤의 실험적 adb 폰 UI 도구, 스트리밍 마크다운 TUI. 라이선스 MIT.
+그리고 `USIX_UI` 뒤의 실험적 컴패니언 폰 UI 도구, 스트리밍 마크다운 TUI. 라이선스 MIT.

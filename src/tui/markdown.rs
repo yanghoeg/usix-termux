@@ -86,10 +86,7 @@ fn render_block_line(raw: &str, trimmed: &str) -> Line<'static> {
 
     // 수평선 --- / *** / ___
     if is_hr(trimmed) {
-        return Line::from(Span::styled(
-            "─".repeat(24),
-            Style::default().fg(MUTED),
-        ));
+        return Line::from(Span::styled("─".repeat(24), Style::default().fg(MUTED)));
     }
 
     // heading #..######
@@ -116,7 +113,10 @@ fn render_block_line(raw: &str, trimmed: &str) -> Line<'static> {
 
 fn is_hr(s: &str) -> bool {
     let s = s.trim();
-    (s.len() >= 3) && (s.chars().all(|c| c == '-') || s.chars().all(|c| c == '*') || s.chars().all(|c| c == '_'))
+    (s.len() >= 3)
+        && (s.chars().all(|c| c == '-')
+            || s.chars().all(|c| c == '*')
+            || s.chars().all(|c| c == '_'))
 }
 
 fn parse_heading(s: &str) -> Option<(u8, &str)> {
@@ -159,7 +159,10 @@ fn parse_list(raw: &str) -> Option<Line<'static>> {
         spans.push(Span::styled("☑ ".to_string(), Style::default().fg(CODE)));
         spans.extend(inline(r, Style::default()));
     } else {
-        spans.push(Span::styled(format!("{marker} "), Style::default().fg(MUTED)));
+        spans.push(Span::styled(
+            format!("{marker} "),
+            Style::default().fg(MUTED),
+        ));
         spans.extend(inline(rest, Style::default()));
     }
 
@@ -173,8 +176,41 @@ fn parse_ordered(s: &str) -> Option<(&str, &str)> {
         return None;
     }
     let after = &s[digits..];
-    let rest = after.strip_prefix(". ").or_else(|| after.strip_prefix(") "))?;
+    let rest = after
+        .strip_prefix(". ")
+        .or_else(|| after.strip_prefix(") "))?;
     Some((&s[..digits], rest))
+}
+
+fn has_closing_delimiter(chars: &[char], start: usize, marker: char, width: usize) -> bool {
+    let mut i = start + width;
+    while i + width <= chars.len() {
+        if chars[i] == marker
+            && (width == 1 || chars[i + 1] == marker)
+            && delimiter_can_close(chars, i)
+        {
+            return true;
+        }
+        i += 1;
+    }
+    false
+}
+
+fn delimiter_can_open(chars: &[char], start: usize, width: usize) -> bool {
+    chars.get(start + width).is_some_and(|c| !c.is_whitespace())
+}
+
+fn delimiter_can_close(chars: &[char], start: usize) -> bool {
+    start
+        .checked_sub(1)
+        .and_then(|i| chars.get(i))
+        .is_some_and(|c| !c.is_whitespace())
+}
+
+fn underscore_can_emphasize(chars: &[char], start: usize, width: usize) -> bool {
+    let previous = start.checked_sub(1).and_then(|i| chars.get(i));
+    let next = chars.get(start + width);
+    !(previous.is_some_and(|c| c.is_alphanumeric()) && next.is_some_and(|c| c.is_alphanumeric()))
 }
 
 /// 인라인 토큰 → Span 들. `**bold**`, `*italic*`, `~~strike~~`, `` `code` ``, `[t](url)`.
@@ -216,24 +252,38 @@ fn inline(text: &str, base: Style) -> Vec<Span<'static>> {
 
         // **bold** / __bold__
         if (c == '*' || c == '_') && chars.get(i + 1) == Some(&c) {
-            flush(&mut spans, &mut buf, base, bold, italic, strike);
-            bold = !bold;
+            let can_emphasize = (c == '*' || underscore_can_emphasize(&chars, i, 2))
+                && delimiter_can_open(&chars, i, 2);
+            if bold || (can_emphasize && has_closing_delimiter(&chars, i, c, 2)) {
+                flush(&mut spans, &mut buf, base, bold, italic, strike);
+                bold = !bold;
+                i += 2;
+                continue;
+            }
+            buf.push(c);
+            buf.push(c);
             i += 2;
             continue;
         }
         // *italic* / _italic_
         if c == '*' || c == '_' {
-            flush(&mut spans, &mut buf, base, bold, italic, strike);
-            italic = !italic;
-            i += 1;
-            continue;
+            let can_emphasize = (c == '*' || underscore_can_emphasize(&chars, i, 1))
+                && delimiter_can_open(&chars, i, 1);
+            if italic || (can_emphasize && has_closing_delimiter(&chars, i, c, 1)) {
+                flush(&mut spans, &mut buf, base, bold, italic, strike);
+                italic = !italic;
+                i += 1;
+                continue;
+            }
         }
         // ~~strike~~
         if c == '~' && chars.get(i + 1) == Some(&'~') {
-            flush(&mut spans, &mut buf, base, bold, italic, strike);
-            strike = !strike;
-            i += 2;
-            continue;
+            if strike || has_closing_delimiter(&chars, i, '~', 2) {
+                flush(&mut spans, &mut buf, base, bold, italic, strike);
+                strike = !strike;
+                i += 2;
+                continue;
+            }
         }
 
         buf.push(c);
@@ -313,11 +363,13 @@ mod tests {
         let out = render("`code` and **bold**");
         let styles: Vec<_> = out[0].spans.iter().map(|s| s.style.fg).collect();
         assert!(styles.contains(&Some(CODE)));
-        assert!(out[0]
-            .spans
-            .iter()
-            .any(|s| s.content.as_ref() == "bold"
-                && s.style.add_modifier.contains(Modifier::BOLD)));
+        assert!(
+            out[0]
+                .spans
+                .iter()
+                .any(|s| s.content.as_ref() == "bold"
+                    && s.style.add_modifier.contains(Modifier::BOLD))
+        );
     }
 
     #[test]
@@ -330,8 +382,16 @@ mod tests {
     #[test]
     fn link_hides_url() {
         let out = render("see [docs](http://x)");
-        assert!(out[0].spans.iter().any(|s| s.content.as_ref() == "docs"
-            && s.style.fg == Some(LINK)));
+        assert!(out[0]
+            .spans
+            .iter()
+            .any(|s| s.content.as_ref() == "docs" && s.style.fg == Some(LINK)));
         assert!(!plain(&out[0]).contains("http"));
+    }
+
+    #[test]
+    fn preserves_literal_markers() {
+        let out = render("foo_bar_baz and 2 * 3 and **broken");
+        assert_eq!(plain(&out[0]), "foo_bar_baz and 2 * 3 and **broken");
     }
 }

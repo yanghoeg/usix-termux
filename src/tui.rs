@@ -6,10 +6,10 @@ mod editor;
 mod markdown;
 
 use crate::domain::agent::{Agent, Turn};
+use crate::ports::Tool;
+use crate::tools::shell::Shell;
 use anyhow::Result;
-use crossterm::event::{
-    self, DisableBracketedPaste, EnableBracketedPaste, Event, KeyEventKind,
-};
+use crossterm::event::{self, DisableBracketedPaste, EnableBracketedPaste, Event, KeyEventKind};
 use crossterm::execute;
 use editor::{Action, Editor};
 use ratatui::layout::{Constraint, Layout};
@@ -17,6 +17,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 use ratatui::{Frame, TerminalOptions, Viewport};
+use serde_json::json;
 use std::io::{self, Write};
 use std::process::{Command, Stdio};
 use std::sync::mpsc;
@@ -44,6 +45,16 @@ const MAX_INPUT_ROWS: u16 = 3;
 enum Read {
     Submit(String),
     Exit,
+}
+
+/// 입력 중 오류나 panic이 나도 raw mode와 bracketed paste를 복구한다.
+struct TerminalGuard;
+
+impl Drop for TerminalGuard {
+    fn drop(&mut self) {
+        let _ = execute!(io::stdout(), DisableBracketedPaste);
+        ratatui::restore();
+    }
 }
 
 pub fn run(mut agent: Agent, model_label: String) -> Result<()> {
@@ -75,6 +86,7 @@ fn read_line(ed: &mut Editor, model: &str) -> Result<Read> {
     let mut term = ratatui::try_init_with_options(TerminalOptions {
         viewport: Viewport::Inline(VIEWPORT_H),
     })?;
+    let _terminal_guard = TerminalGuard;
     let _ = execute!(io::stdout(), EnableBracketedPaste);
 
     let out = loop {
@@ -96,8 +108,6 @@ fn read_line(ed: &mut Editor, model: &str) -> Result<Read> {
         }
     };
 
-    let _ = execute!(io::stdout(), DisableBracketedPaste);
-    ratatui::restore();
     Ok(out)
 }
 
@@ -137,6 +147,41 @@ fn drive(agent: &mut Agent) -> Result<()> {
 fn clear_line() {
     print!("\r\x1b[K");
     let _ = io::stdout().flush();
+}
+
+const MAX_APPROVAL_PROMPT_CHARS: usize = 1200;
+
+fn is_terminal_control(c: char) -> bool {
+    c.is_control()
+        || matches!(
+            c,
+            '\u{202A}'
+                | '\u{202B}'
+                | '\u{202C}'
+                | '\u{202D}'
+                | '\u{202E}'
+                | '\u{2066}'
+                | '\u{2067}'
+                | '\u{2068}'
+                | '\u{2069}'
+        )
+}
+
+/// 모델·파일·알림·셸에서 온 문자열이 터미널 제어 시퀀스로 해석되지 않게 한다.
+fn sanitize_terminal_text(text: &str) -> String {
+    text.chars()
+        .map(|c| if is_terminal_control(c) { '�' } else { c })
+        .collect()
+}
+
+fn truncate_display(text: &str, limit: usize) -> String {
+    let mut chars = text.chars();
+    let out: String = chars.by_ref().take(limit).collect();
+    if chars.next().is_some() {
+        format!("{out}…")
+    } else {
+        out
+    }
 }
 
 /// 모델 진행을 워커 스레드로 돌리고, content 델타는 채널로 받아 메인에서 출력한다.
@@ -225,6 +270,7 @@ impl StreamPrinter {
 }
 
 fn read_yes_no(prompt: &str) -> bool {
+    let prompt = truncate_display(&sanitize_terminal_text(prompt), MAX_APPROVAL_PROMPT_CHARS);
     eprint!("\n\x1b[33m{prompt}  [y/N] \x1b[0m");
     let _ = io::stderr().flush();
     let mut s = String::new();
@@ -232,32 +278,14 @@ fn read_yes_no(prompt: &str) -> bool {
     matches!(s.trim(), "y" | "Y" | "yes")
 }
 
-// `! cmd` — 로컬 셸 실행(캡처 후 출력). 대화형 명령엔 부적합(출력만 표시).
+// `! cmd` — 로컬 셸 실행. 셸 도구와 같은 timeout·출력 상한을 적용한다.
 fn run_shell(cmd: &str) {
     let cmd = cmd.trim();
     if cmd.is_empty() {
         return;
     }
-    match Command::new("sh")
-        .arg("-c")
-        .arg(cmd)
-        .stdin(Stdio::null())
-        .output()
-    {
-        Ok(o) => {
-            let mut s = String::from_utf8_lossy(&o.stdout).into_owned();
-            let err = String::from_utf8_lossy(&o.stderr);
-            if !err.trim().is_empty() {
-                if !s.is_empty() {
-                    s.push('\n');
-                }
-                s.push_str(err.trim_end());
-            }
-            if s.trim().is_empty() {
-                s = "(no output)".into();
-            }
-            print_system(&s);
-        }
+    match Shell.run(&json!({ "command": cmd })) {
+        Ok(output) => print_system(&output),
         Err(e) => print_system(&format!("shell error: {e}")),
     }
 }
@@ -281,7 +309,7 @@ fn print_assistant(md: &str) {
 fn print_system(text: &str) {
     println!();
     for l in text.lines() {
-        println!("\x1b[38;2;175;175;175m{l}\x1b[0m");
+        println!("\x1b[38;2;175;175;175m{}\x1b[0m", sanitize_terminal_text(l));
     }
 }
 
@@ -305,7 +333,7 @@ fn line_to_ansi(line: &Line) -> String {
         if m.contains(Modifier::CROSSED_OUT) {
             s.push_str("\x1b[9m");
         }
-        s.push_str(&span.content);
+        s.push_str(&sanitize_terminal_text(&span.content));
         s.push_str("\x1b[0m");
     }
     s
@@ -379,7 +407,10 @@ fn draw_box(f: &mut Frame, buffer: &str, cursor: usize, model: &str, editing: bo
     let (top, body_area, bottom) = (rows[0], rows[1], rows[2]);
 
     f.render_widget(Paragraph::new(box_rule(area.width, "╭", "╮", border)), top);
-    f.render_widget(Paragraph::new(box_rule(area.width, "╰", "╯", border)), bottom);
+    f.render_widget(
+        Paragraph::new(box_rule(area.width, "╰", "╯", border)),
+        bottom,
+    );
 
     let (vrow, col) = cursor_line_col(buffer, cursor, area.width);
     let scroll = vrow.saturating_sub(input_h.saturating_sub(1));
@@ -394,7 +425,10 @@ fn draw_box(f: &mut Frame, buffer: &str, cursor: usize, model: &str, editing: bo
         f.set_cursor_position((body_area.x + x_off + col, body_area.y + (vrow - scroll)));
 
         let (left, lstyle) = if bash {
-            ("bash — Enter runs local shell".to_string(), Style::default().fg(RED))
+            (
+                "bash — Enter runs local shell".to_string(),
+                Style::default().fg(RED),
+            )
         } else {
             (
                 "Ctrl+J newline · ↑ history · ! shell · exit quits".to_string(),
@@ -631,7 +665,11 @@ fn banner_lines(model_label: &str) -> Vec<Line<'static>> {
     let gap = UnicodeWidthStr::width(MASCOT_GAP);
     let show_mascot = cols >= ART_W;
     let side_by_side = show_mascot && cols >= ART_W + gap + SIDE_MIN_COPY_W;
-    let copy_width = if side_by_side { cols - ART_W - gap } else { cols };
+    let copy_width = if side_by_side {
+        cols - ART_W - gap
+    } else {
+        cols
+    };
 
     let copy = copy_lines(&cwd, &branch, model_label, copy_width);
     if !show_mascot {
@@ -677,7 +715,9 @@ fn copy_lines(cwd: &str, branch: &str, model: &str, width: usize) -> Vec<Line<'s
             Span::styled("✻ ", Style::default().fg(ACCENT)),
             Span::styled(
                 "usix-termux",
-                Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(Color::White)
+                    .add_modifier(Modifier::BOLD),
             ),
             Span::styled(" v0.0.1", Style::default().fg(MUTED)),
         ])
@@ -688,7 +728,10 @@ fn copy_lines(cwd: &str, branch: &str, model: &str, width: usize) -> Vec<Line<'s
         ))
     };
     let ctx = context_line(cwd, branch, model, width);
-    vec![logo, Line::from(Span::styled(ctx, Style::default().fg(MUTED)))]
+    vec![
+        logo,
+        Line::from(Span::styled(ctx, Style::default().fg(MUTED))),
+    ]
 }
 
 /// `cwd X · branch Y · model Z` 한 줄 — 좁을수록 라벨을 점진 축약하고 값은 tail 절단.
@@ -715,7 +758,13 @@ fn context_line(cwd: &str, branch: &str, model: &str, max_width: usize) -> Strin
     let cwd_w = (rest * 3 / 5).max(usize::from(rest > 0));
     let branch_w = rest.saturating_sub(cwd_w);
 
-    let fit = |s: &str, w: usize| if w == 0 { String::new() } else { clamp_cells(s, w) };
+    let fit = |s: &str, w: usize| {
+        if w == 0 {
+            String::new()
+        } else {
+            clamp_cells(s, w)
+        }
+    };
     let line = format!(
         "{l_cwd}{}{l_branch}{}{l_model}{}",
         fit(cwd, cwd_w),
@@ -739,5 +788,24 @@ fn read_git_branch() -> Option<String> {
         None
     } else {
         Some(s)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn terminal_text_replaces_control_and_bidi_characters() {
+        let safe = sanitize_terminal_text("ok\u{1b}[31m\u{202e}text");
+        assert!(!safe.contains('\u{1b}'));
+        assert!(!safe.contains('\u{202e}'));
+        assert!(safe.contains('�'));
+    }
+
+    #[test]
+    fn display_truncation_is_character_safe() {
+        assert_eq!(truncate_display("가나다", 2), "가나…");
+        assert_eq!(truncate_display("가나", 2), "가나");
     }
 }

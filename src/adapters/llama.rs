@@ -75,7 +75,8 @@ impl Llm for LlamaCpp {
         let reader = std::io::BufReader::new(resp.into_reader());
 
         let mut content = String::new();
-        let mut sunk = 0usize; // content 중 sink 로 이미 흘린 바이트 수.
+        // content 중 sink 로 이미 흘린 바이트 수.
+        let mut sunk = 0usize;
         // index → (id, name, arguments 조각 누적).
         let mut calls: Vec<(String, String, String)> = Vec::new();
 

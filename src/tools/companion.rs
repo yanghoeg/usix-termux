@@ -75,9 +75,10 @@ impl Tool for NotifReply {
         // 소형 모델이 key 를 지어내거나 낡은 key 를 쓰는 걸 막는다 — 현재 알림 목록에 실재하는
         // key 에만 답장을 허용. 없으면 엉뚱한 곳에 발송하는 대신 명확히 되돌린다.
         let items = bridge::get("/notifications")?;
-        let known = items
-            .as_array()
-            .is_some_and(|a| a.iter().any(|n| n.get("key").and_then(|v| v.as_str()) == Some(key)));
+        let known = items.as_array().is_some_and(|a| {
+            a.iter()
+                .any(|n| n.get("key").and_then(|v| v.as_str()) == Some(key))
+        });
         if !known {
             return Err(anyhow!(
                 "그 key 의 알림이 현재 목록에 없다(지어냈거나 이미 읽어서 사라짐). \
@@ -90,7 +91,9 @@ impl Tool for NotifReply {
         } else {
             Err(anyhow!(
                 "답장 실패: {}",
-                body.get("error").and_then(|v| v.as_str()).unwrap_or("알 수 없음")
+                body.get("error")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("알 수 없음")
             ))
         }
     }

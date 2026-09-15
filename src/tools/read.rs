@@ -4,6 +4,24 @@ use crate::ports::{ApprovalClass, Tool};
 use anyhow::Result;
 use serde_json::{json, Value};
 
+const DEFAULT_LOG_LIMIT: i64 = 10;
+const MAX_LOG_LIMIT: i64 = 100;
+const MAX_SMS_MESSAGES: i64 = 15;
+
+fn log_limit(args: &Value) -> i64 {
+    args.get("limit")
+        .and_then(|v| v.as_i64())
+        .unwrap_or(DEFAULT_LOG_LIMIT)
+        .clamp(1, MAX_LOG_LIMIT)
+}
+
+fn sms_limit(args: &Value) -> i64 {
+    args.get("limit")
+        .and_then(|v| v.as_i64())
+        .unwrap_or(DEFAULT_LOG_LIMIT)
+        .clamp(1, MAX_SMS_MESSAGES)
+}
+
 pub struct SmsList;
 impl Tool for SmsList {
     fn name(&self) -> &str {
@@ -16,7 +34,12 @@ impl Tool for SmsList {
         json!({
             "type": "object",
             "properties": {
-                "limit": { "type": "integer", "description": "가져올 개수 (기본 10)" }
+                "limit": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": MAX_SMS_MESSAGES,
+                    "description": "가져올 개수 (기본 10, 최대 15)"
+                }
             }
         })
     }
@@ -26,19 +49,19 @@ impl Tool for SmsList {
     fn run(&self, args: &Value) -> Result<String> {
         // 소형 모델 컨텍스트가 4096뿐이라, 긴 재난문자 여러 건이 통째로 들어오면 다음
         // 요청이 400(exceeds context)으로 깨진다. 개수와 본문 길이를 함께 상한 둔다.
-        const MAX_MSGS: i64 = 15;
         const MAX_BODY: usize = 120; // 문자(char) 기준 — 한글 바이트 슬라이싱 방지.
-        let want = args.get("limit").and_then(|v| v.as_i64()).unwrap_or(10);
-        let limit = want.clamp(1, MAX_MSGS);
+        let limit = sms_limit(args);
         let raw = termux::run("termux-sms-list", &["-l", &limit.to_string()])?;
         let Ok(Value::Array(mut items)) = serde_json::from_str::<Value>(&raw) else {
             return Ok(raw);
         };
-        for m in items.iter_mut() {
-            if let Some(body) = m.get("body").and_then(|v| v.as_str()) {
-                if body.chars().count() > MAX_BODY {
-                    let cut: String = body.chars().take(MAX_BODY).collect();
-                    m["body"] = json!(format!("{cut}…"));
+        for item in &mut items {
+            if let Some(m) = item.as_object_mut() {
+                if let Some(body) = m.get("body").and_then(|v| v.as_str()) {
+                    if body.chars().count() > MAX_BODY {
+                        let cut: String = body.chars().take(MAX_BODY).collect();
+                        m["body"] = json!(format!("{cut}…"));
+                    }
                 }
             }
         }
@@ -58,7 +81,12 @@ impl Tool for CallLog {
         json!({
             "type": "object",
             "properties": {
-                "limit": { "type": "integer", "description": "가져올 개수 (기본 10)" }
+                "limit": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": MAX_LOG_LIMIT,
+                    "description": "가져올 개수 (기본 10, 최대 100)"
+                }
             }
         })
     }
@@ -66,7 +94,7 @@ impl Tool for CallLog {
         ApprovalClass::ReadOnly
     }
     fn run(&self, args: &Value) -> Result<String> {
-        let limit = args.get("limit").and_then(|v| v.as_i64()).unwrap_or(10);
+        let limit = log_limit(args);
         termux::run("termux-call-log", &["-l", &limit.to_string()])
     }
 }
@@ -142,5 +170,20 @@ impl Tool for Battery {
     }
     fn run(&self, _args: &Value) -> Result<String> {
         termux::run("termux-battery-status", &[])
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{log_limit, sms_limit, MAX_LOG_LIMIT, MAX_SMS_MESSAGES};
+    use serde_json::json;
+
+    #[test]
+    fn log_limit_is_bounded() {
+        assert_eq!(log_limit(&json!({})), 10);
+        assert_eq!(log_limit(&json!({ "limit": 0 })), 1);
+        assert_eq!(log_limit(&json!({ "limit": -5 })), 1);
+        assert_eq!(log_limit(&json!({ "limit": i64::MAX })), MAX_LOG_LIMIT);
+        assert_eq!(sms_limit(&json!({ "limit": i64::MAX })), MAX_SMS_MESSAGES);
     }
 }

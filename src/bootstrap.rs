@@ -1,7 +1,9 @@
 // BOOTSTRAP — 백엔드(llama.cpp 기본 / ollama) 설치·서버 기동·모델 준비 CLI.
 use crate::tools::bridge;
 use anyhow::{anyhow, Result};
-use std::process::Command;
+use std::fs::OpenOptions;
+use std::path::PathBuf;
+use std::process::{Command, Stdio};
 use std::time::Duration;
 
 /// 백엔드 선택 — 기본 llama.cpp, `USIX_BACKEND=ollama` 로 전환.
@@ -118,7 +120,7 @@ pub(crate) fn llama_model_path() -> String {
     })
 }
 
-/// GGUF 모델 보장 — 기본 경로가 비어 있으면 `llama-model-get 3b` 로 받는다.
+/// GGUF 모델 보장 — 기본 경로가 비어 있으면 `llama-model-get hammer` 로 받는다.
 /// (USIX_MODEL 로 커스텀 경로를 지정했으면 크기를 알 수 없어 자동 다운로드하지 않는다.)
 pub fn ensure_llama_model() -> Result<()> {
     let path = llama_model_path();
@@ -181,7 +183,7 @@ pub fn ensure_llama_serve() -> Result<bool> {
     let model = llama_model_path();
     if !std::path::Path::new(&model).exists() {
         return Err(anyhow!(
-            "model file not found: {model}\n  get it with `llama-model-get 3b` or set the path via USIX_MODEL."
+            "model file not found: {model}\n  get it with `llama-model-get hammer` or set the path via USIX_MODEL."
         ));
     }
     let gpu = has_cmd("llama-gpu");
@@ -195,18 +197,49 @@ pub fn ensure_llama_serve() -> Result<bool> {
     // -c 8192: 문자/알림 여러 건이 한 툴결과로 들어와도 4096 을 넘겨 400(exceeds context)
     // 나던 걸 막는다. 2B 는 KV 캐시가 작아 1슬롯이면 이 컨텍스트도 감당된다.
     // --jinja: GGUF 내장 챗 템플릿 사용(Hammer 등 도구모델이 도구호출을 제대로 내려면 필요).
-    let launch = if gpu {
-        // env: nohup 뒤에서 `VAR=..` 는 명령 이름으로 오해되므로 env 로 넘긴다.
-        format!("env LLAMA_GPU_BIN=llama-server llama-gpu -m '{model}' --host 127.0.0.1 --port {port} -c 8192 --parallel 1 --jinja")
+    // 모델 경로를 shell 문자열에 넣지 않고 argv 로 전달한다. 경로에 따옴표가 있어도
+    // shell 문맥 탈출이나 명령 주입이 일어나지 않는다.
+    let log_path = std::env::var_os("PREFIX")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("/tmp/usix"))
+        .join("var/log/llama.log");
+    if let Some(parent) = log_path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| anyhow!("로그 디렉토리 생성 실패 ({}): {e}", parent.display()))?;
+    }
+    let log = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log_path)
+        .map_err(|e| anyhow!("llama 로그 열기 실패 ({}): {e}", log_path.display()))?;
+    let log_err = log.try_clone()?;
+    let port = port.to_string();
+    let mut launch = Command::new("setsid");
+    launch.arg("nohup");
+    if gpu {
+        launch.arg("llama-gpu").env("LLAMA_GPU_BIN", "llama-server");
     } else {
-        format!("llama-server -m '{model}' --host 127.0.0.1 --port {port} -c 8192 --parallel 1 --jinja")
-    };
-    Command::new("sh")
-        .arg("-c")
-        .arg(format!(
-            "setsid nohup {launch} </dev/null >\"$PREFIX/var/log/llama.log\" 2>&1 &"
-        ))
-        .status()?;
+        launch.arg("llama-server");
+    }
+    let mut child = launch
+        .args([
+            "-m",
+            &model,
+            "--host",
+            "127.0.0.1",
+            "--port",
+            &port,
+            "-c",
+            "8192",
+            "--parallel",
+            "1",
+            "--jinja",
+        ])
+        .stdin(Stdio::null())
+        .stdout(Stdio::from(log))
+        .stderr(Stdio::from(log_err))
+        .spawn()
+        .map_err(|e| anyhow!("llama-server 시작 실패: {e}"))?;
     // 3B GPU 첫 로드는 수십 초 걸릴 수 있어 넉넉히 대기(≤120s).
     for _ in 0..240 {
         if llama_up() {
@@ -214,9 +247,33 @@ pub fn ensure_llama_serve() -> Result<bool> {
         }
         std::thread::sleep(Duration::from_millis(500));
     }
+    let _ = child.kill();
+    let _ = child.wait();
     Err(anyhow!(
-        "could not confirm llama-server startup (log: $PREFIX/var/log/llama.log)"
+        "could not confirm llama-server startup (log: {})",
+        log_path.display()
     ))
+}
+
+/// 대화형/one-shot 실행이 직접 기동한 backend만 수명 종료 시 정리한다.
+pub struct BackendServeGuard {
+    started: bool,
+}
+
+impl BackendServeGuard {
+    pub fn start() -> Result<Self> {
+        Ok(Self {
+            started: ensure_backend_serve()?,
+        })
+    }
+}
+
+impl Drop for BackendServeGuard {
+    fn drop(&mut self) {
+        if self.started {
+            stop_backend_serve();
+        }
+    }
 }
 
 /// serve 데몬 종료 — "시작한 쪽이 정리한다" 원칙에 따라 우리가 띄운 서버만 내린다.
@@ -315,7 +372,11 @@ fn doctor_companion(mark: &dyn Fn(bool) -> &'static str) -> Option<serde_json::V
         // 신형 앱: 토큰 검사가 켜져 있다 → 페어링 상태를 그대로 보고.
         Some(true) => {
             let paired = h.get("paired").and_then(|v| v.as_bool()) == Some(true);
-            println!("{} 토큰 페어링 ({})", mark(paired), bridge::token_path().display());
+            println!(
+                "{} 토큰 페어링 ({})",
+                mark(paired),
+                bridge::token_path().display()
+            );
             if !paired {
                 println!("   → 앱에서 '토큰 복사' 를 누른 뒤 `usix-termux pair` 를 실행하세요.");
             }
@@ -381,7 +442,10 @@ pub fn doctor() -> Result<()> {
         let model = ollama_model();
         println!("{} ollama installed", mark(has_cmd("ollama")));
         println!("{} ollama server running", mark(server_up()));
-        println!("{} model `{model}`", mark(has_model(&model).unwrap_or(false)));
+        println!(
+            "{} model `{model}`",
+            mark(has_model(&model).unwrap_or(false))
+        );
     } else {
         let model = llama_model_path();
         println!("{} llama.cpp (llama-server)", mark(has_cmd("llama-server")));
@@ -392,9 +456,17 @@ pub fn doctor() -> Result<()> {
         );
         println!("{} llama-server running", mark(llama_up()));
     }
-    println!("{} termux-api (binary)", mark(has_cmd("termux-battery-status")));
-    println!("{} Termux:API app (bridge responds)", mark(termux_bridge_ok()));
-    {
+    println!(
+        "{} termux-api (binary)",
+        mark(has_cmd("termux-battery-status"))
+    );
+    println!(
+        "{} Termux:API app (bridge responds)",
+        mark(termux_bridge_ok())
+    );
+    let ui = std::env::var("USIX_UI").is_ok();
+    let notif = std::env::var("USIX_COMPANION").is_ok();
+    if ui || notif {
         let health = doctor_companion(&mark);
         let acc = health
             .as_ref()

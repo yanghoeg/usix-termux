@@ -41,7 +41,10 @@ fn expect_ok(body: &Value, on_ok: String, on_fail: &str) -> Result<String> {
     if body.get("ok").and_then(|v| v.as_bool()) == Some(true) {
         Ok(on_ok)
     } else {
-        let err = body.get("error").and_then(|v| v.as_str()).unwrap_or(on_fail);
+        let err = body
+            .get("error")
+            .and_then(|v| v.as_str())
+            .unwrap_or(on_fail);
         Err(anyhow!("{err}"))
     }
 }
@@ -61,7 +64,11 @@ fn parse_elems(body: &Value) -> Vec<Elem> {
     };
     arr.iter()
         .map(|n| Elem {
-            text: n.get("text").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+            text: n
+                .get("text")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string(),
             x: n.get("x").and_then(|v| v.as_i64()).unwrap_or(0),
             y: n.get("y").and_then(|v| v.as_i64()).unwrap_or(0),
             editable: n.get("editable").and_then(|v| v.as_bool()).unwrap_or(false),
@@ -85,7 +92,9 @@ fn number_elems(elems: &[Elem]) -> String {
 /// text 에 q(대소문자 무시)가 포함된 첫 요소의 인덱스. (순수: 테스트 가능)
 fn find_text(elems: &[Elem], q: &str) -> Option<usize> {
     let ql = q.to_lowercase();
-    elems.iter().position(|e| e.text.to_lowercase().contains(&ql))
+    elems
+        .iter()
+        .position(|e| e.text.to_lowercase().contains(&ql))
 }
 
 /// /screen 을 읽어 캐시에 저장하고 번호 매긴 목록을 돌려준다. ui_dump 와 모든 자동검증 꼬리가 공유.
@@ -211,7 +220,10 @@ impl Tool for UiTap {
             }
             let i = usize::try_from(index).map_err(|_| anyhow!("잘못된 index: {index}"))?;
             let e = guard.get(i).ok_or_else(|| {
-                anyhow!("번호 범위 밖: {index} (0..{}). ui_dump 를 다시 읽어라.", guard.len() - 1)
+                anyhow!(
+                    "번호 범위 밖: {index} (0..{}). ui_dump 를 다시 읽어라.",
+                    guard.len() - 1
+                )
             })?;
             (e.x, e.y)
         };
@@ -252,7 +264,10 @@ impl Tool for UiTapText {
         let elems = parse_elems(&body);
         let idx = find_text(&elems, text).ok_or_else(|| {
             let shown = &elems[..elems.len().min(MAX_NODES)];
-            anyhow!("화면에서 \"{text}\" 를 못 찾음. 현재 화면:\n{}", number_elems(shown))
+            anyhow!(
+                "화면에서 \"{text}\" 를 못 찾음. 현재 화면:\n{}",
+                number_elems(shown)
+            )
         })?;
         let (x, y) = (elems[idx].x, elems[idx].y);
         let tap = bridge_post("/tap", json!({ "x": x, "y": y }))?;
@@ -321,13 +336,21 @@ mod tests {
     use super::*;
 
     fn elem(text: &str, editable: bool) -> Elem {
-        Elem { text: text.into(), x: 0, y: 0, editable }
+        Elem {
+            text: text.into(),
+            x: 0,
+            y: 0,
+            editable,
+        }
     }
 
     #[test]
     fn number_elems_numbers_and_tags_input() {
         let els = vec![elem("친구", false), elem("메시지 입력", true)];
-        assert_eq!(number_elems(&els), "[0] \"친구\"\n[1] \"메시지 입력\" [입력창]");
+        assert_eq!(
+            number_elems(&els),
+            "[0] \"친구\"\n[1] \"메시지 입력\" [입력창]"
+        );
     }
 
     #[test]
@@ -381,7 +404,11 @@ mod tests {
     #[test]
     fn expect_ok_maps_ok_and_error() {
         assert!(expect_ok(&json!({ "ok": true }), "good".into(), "bad").is_ok());
-        let e = expect_ok(&json!({ "ok": false, "error": "boom" }), "good".into(), "bad");
+        let e = expect_ok(
+            &json!({ "ok": false, "error": "boom" }),
+            "good".into(),
+            "bad",
+        );
         assert_eq!(e.unwrap_err().to_string(), "boom");
     }
 }

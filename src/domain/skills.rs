@@ -110,9 +110,13 @@ pub fn guidance(skills: &[&Skill]) -> String {
     if skills.is_empty() {
         return String::new();
     }
-    let mut s = String::from("\n\n# 사용 가능한 스킬(절차)\n관련 요청이 오면 아래 절차를 따른다.\n");
+    let mut s =
+        String::from("\n\n# 사용 가능한 스킬(절차)\n관련 요청이 오면 아래 절차를 따른다.\n");
     for sk in skills {
-        s.push_str(&format!("\n## {} — {}\n{}\n", sk.name, sk.description, sk.body));
+        s.push_str(&format!(
+            "\n## {} — {}\n{}\n",
+            sk.name, sk.description, sk.body
+        ));
     }
     s
 }

@@ -152,7 +152,14 @@ impl Editor {
                     Action::Cancel
                 }
             }
-            (K::Char('d'), true, _) => Action::Exit,
+            // Ctrl+D는 빈 입력에서만 EOF/종료로 동작한다. 입력 중에는 작성 내용을 잃지 않는다.
+            (K::Char('d'), true, _) => {
+                if self.buffer.is_empty() {
+                    Action::Exit
+                } else {
+                    Action::None
+                }
+            }
             // Ctrl+J = 개행(가장 신뢰성 높은 범용 폴백; Termux는 kitty 미지원이라 Shift+Enter 불가).
             (K::Char('j'), true, _) => {
                 self.buffer.insert(self.cursor, '\n');
@@ -303,5 +310,14 @@ mod tests {
         assert!(matches!(e.on_key(K::Enter, M::NONE), Action::None));
         e.insert_str("hi");
         assert!(matches!(e.on_key(K::Enter, M::NONE), Action::Submit(_)));
+    }
+
+    #[test]
+    fn ctrl_d_only_exits_on_empty_input() {
+        let mut e = Editor::new();
+        assert!(matches!(e.on_key(K::Char('d'), M::CONTROL), Action::Exit));
+        e.insert_str("keep me");
+        assert!(matches!(e.on_key(K::Char('d'), M::CONTROL), Action::None));
+        assert_eq!(e.buffer, "keep me");
     }
 }

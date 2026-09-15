@@ -64,7 +64,7 @@ tools/
   read.rs          sms_list, call_log, battery, contacts   (ReadOnly, automatic)
   comms.rs         sms_send, call, reminder                (Mutating, approval required)
   shell.rs         read_file, list_dir (ReadOnly) · shell, write_file (Mutating)
-  ui.rs            ui_dump (ReadOnly) · app_open (Mutating)  — adb, opt-in USIX_UI
+  ui.rs            ui_dump (ReadOnly) · app_open/ui_tap/ui_tap_text/ui_type/ui_back (Mutating) — companion AccessibilityService, default
   companion.rs     notif_list (ReadOnly) · notif_reply (Mutating) — bridge, default (kakao_read)
 tui.rs             inline ratatui input box + streamed, plain-stdout transcript
   editor.rs        UTF-8 line editor (multiline, history, word keys)
@@ -130,7 +130,7 @@ usix-termux -c "..."   # one-shot query (non-interactive; mutating tools auto-de
 # smaller/faster GGUF
 USIX_MODEL=~/models/qwen2.5-1.5b-instruct-q5_k_m.gguf usix-termux
 # ollama backend
-USIX_BACKEND=ollama USIX_MODEL=qwen2.5:1.5b usix-termux
+USIX_BACKEND=ollama USIX_MODEL=qwen2.5:1.5b-instruct-q5_K_M usix-termux
 ```
 
 ### TUI keys
@@ -181,6 +181,9 @@ Experimental phone-UI tools, registered only when `USIX_UI` is set (see below):
 | ----------- | -------- | --------- |
 | `ui_dump`   | ReadOnly | automatic |
 | `app_open`  | Mutating | `y/N`     |
+| `ui_tap`    | Mutating | `y/N`     |
+| `ui_type`   | Mutating | `y/N`     |
+| `ui_back`   | Mutating | `y/N`     |
 
 Companion notification tools (registered by default; see below):
 
@@ -191,39 +194,39 @@ Companion notification tools (registered by default; see below):
 
 ## Phone UI control (experimental)
 
-Beyond `termux-api`, the agent can read the screen and launch apps via **on-device adb**
-over Android **wireless debugging** — no root. This drives arbitrary apps (KakaoTalk, Line,
-…) at the UI level.
+Beyond `termux-api`, the agent can read and operate the visible phone UI through the separate
+**[usix-companion](https://github.com/yanghoeg/usix-companion)** app's Android
+`AccessibilityService`. It needs no root or adb and can drive arbitrary visible app flows
+(KakaoTalk, Line, …).
 
-Setup (one-time; some devices require re-pairing after reboot):
+Setup (one-time):
 
 ```bash
-pkg install android-tools
-# Settings → Developer options → Wireless debugging → Pair device with pairing code
-adb pair localhost:PAIR_PORT       # enter the 6-digit code
-adb connect localhost:CONNECT_PORT
-USIX_UI=1 usix-termux doctor        # adb ✅, device connected ✅
-USIX_UI=1 usix-termux               # UI tools now registered
+# Install and launch usix-companion; enable its Accessibility service in Android Settings.
+# In the companion app, tap "토큰 복사", then in Termux:
+usix-termux pair                    # reads the clipboard, or paste when prompted
+USIX_UI=1 usix-termux doctor         # bridge/token/accessibility ✅
+USIX_UI=1 usix-termux                # UI tools now registered
 ```
 
-When `USIX_UI` is set, two tools are added: `ui_dump` (ReadOnly — reads on-screen text and
-element coordinates via `uiautomator`) and `app_open` (Mutating — launches an app by
-package). The bundled `kakao_read` skill uses them to open KakaoTalk and summarize the
-visible chat.
+When `USIX_UI` is set, five tools are added: `ui_dump` (ReadOnly — reads visible text and
+element coordinates), plus `app_open`, `ui_tap`, `ui_type`, and `ui_back` (Mutating — open an
+app, tap a visible element, type text, or navigate back). The bundled `kakao_read` skill uses
+them to open KakaoTalk and summarize the visible chat; it can tap/type only when the user
+requests that action.
 
 Honest caveats:
 
-- **Read-only for now.** Tapping/typing (`ui_tap`/`ui_type`) is a future cut; the current
-  cut opens apps and reads the screen but does not send replies.
-- **Only what's visible.** adb runs as the `shell` user, which can drive UI and read the
-  screen but **cannot** read another app's private database — full chat history still needs
-  root.
+- **Only what's visible.** Accessibility exposes the current UI hierarchy and visible text;
+  it **cannot** read another app's private database or full chat history.
+- **Explicit approval.** Opening an app, tapping, typing, and going back are mutating actions
+  and require `y/N` approval. Text is sent to the currently focused visible field.
 - **Brittle.** UI layouts and coordinates vary per device; a small local model reliably
   handles only short, scripted flows.
 
 ## Companion app — notifications & reply (experimental)
 
-adb reads the *screen* but can't read another app's notifications or fire an inline reply.
+The UI bridge reads the *screen* but can't read another app's notifications or fire an inline reply.
 The separate **[usix-companion](https://github.com/yanghoeg/usix-companion)** app (a tiny
 Kotlin `NotificationListenerService`) does both, with **no
 root and no adb**: it captures incoming notifications (KakaoTalk, Line, …) and can send an
@@ -233,6 +236,10 @@ app's inline **RemoteInput** reply. It exposes a loopback-only HTTP bridge on
 - `notif_list` (ReadOnly) — recent notifications (`pkg`, `title`, `text`, `key`, `canReply`)
 - `notif_reply` (Mutating, `y/N`) — send an inline reply to a notification `key`
 
+Unlike screen-reading, this **can actually reply** — and it reads incoming messages in the
+**background with no app switch** (no foregrounding KakaoTalk). These tools are registered
+by default. The bundled `kakao_read` skill summarizes unread KakaoTalk notifications and, on
+request, sends an inline reply — this is the default path for "카톡 요약 / 카톡 뭐 왔어".
 Unlike screen-reading, this **can actually reply** — and it reads incoming messages in the
 **background with no app switch** (no foregrounding KakaoTalk). These tools are registered
 by default. The bundled `kakao_read` skill summarizes unread KakaoTalk notifications and, on
@@ -247,7 +254,8 @@ Setup:
 #    - or build it yourself (needs a local Gradle 8.10.2 + the Android SDK):
 #        git clone https://github.com/yanghoeg/usix-companion && cd usix-companion
 #        gradle assembleDebug            # or open in Android Studio
-# 2. Install it, launch once, and grant "Notification access" (the app has a button for it)
+# 2. Install it, launch once, and grant "Notification access" (and "Accessibility access"
+#    when using the phone UI); the app has buttons for both
 # 3. Pair once: tap "토큰 복사" (copy token) in the app, then in Termux:
 usix-termux pair            # reads the clipboard, or paste when prompted
 # 4. Back in Termux:
@@ -291,5 +299,5 @@ Sent.
 ## Status
 
 v0 — two backends (llama.cpp default / ollama), six read tools + five mutating tools
-(approval-gated), plus experimental adb phone-UI tools behind `USIX_UI`, streaming markdown
+(approval-gated), plus experimental companion phone-UI tools behind `USIX_UI`, streaming markdown
 TUI. Licensed under MIT.
