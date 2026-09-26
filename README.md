@@ -175,15 +175,19 @@ Sent to 010-1234-5678.
 | `shell`      | Mutating | `y/N`     |
 | `write_file` | Mutating | `y/N`     |
 
-Experimental phone-UI tools, registered only when `USIX_UI` is set (see below):
+Experimental phone-UI and mail tools, registered by default (see below):
 
 | Tool        | Class    | Approval  |
 | ----------- | -------- | --------- |
 | `ui_dump`   | ReadOnly | automatic |
 | `app_open`  | Mutating | `y/N`     |
 | `ui_tap`    | Mutating | `y/N`     |
+| `ui_tap_text` | Mutating | `y/N`   |
 | `ui_type`   | Mutating | `y/N`     |
 | `ui_back`   | Mutating | `y/N`     |
+| `ui_scroll` | Mutating | `y/N`     |
+| `email_open` | Mutating | `y/N`    |
+| `email_compose` | Mutating | `y/N` |
 
 Companion notification tools (registered by default; see below):
 
@@ -206,14 +210,15 @@ Setup (one-time):
 # In the companion app, tap "토큰 복사", then in Termux:
 usix-termux pair                    # reads the clipboard, or paste when prompted
 USIX_UI=1 usix-termux doctor         # bridge/token/accessibility ✅
-USIX_UI=1 usix-termux                # UI tools now registered
+usix-termux                          # UI tools are registered by default
 ```
 
-When `USIX_UI` is set, five tools are added: `ui_dump` (ReadOnly — reads visible text and
-element coordinates), plus `app_open`, `ui_tap`, `ui_type`, and `ui_back` (Mutating — open an
-app, tap a visible element, type text, or navigate back). The bundled `kakao_read` skill uses
-them to open KakaoTalk and summarize the visible chat; it can tap/type only when the user
-requests that action.
+UI tools are registered by default: `ui_dump` reads the current screen; `app_open`,
+`ui_tap`, `ui_tap_text`, `ui_type`, `ui_back`, and `ui_scroll` open or control an app.
+The bundled `kakao_read` skill first checks notifications and opens the conversation
+when no suitable notification is available. Scrolling makes older messages and
+longer content accessible. Use `package` with `ui_dump`, `ui_scroll`, and `ui_type`
+to select the intended app.
 
 Honest caveats:
 
@@ -223,6 +228,32 @@ Honest caveats:
   and require `y/N` approval. Text is sent to the currently focused visible field.
 - **Brittle.** UI layouts and coordinates vary per device; a small local model reliably
   handles only short, scripted flows.
+
+## Thunderbird mail without notifications
+
+Update both the companion APK and `usix-termux`. Sign in to the mail account in
+Thunderbird for Android, unlock the phone, and enable companion accessibility.
+The agent uses the account already in Thunderbird; no separate IMAP/SMTP password
+is needed. The account domain does not have to be a public webmail provider.
+
+- `email_open` opens Thunderbird, then `ui_dump(package=net.thunderbird.android)`
+  reads the mailbox or currently displayed message.
+- `email_compose(to, subject, body)` prepares a new message. It **does not send** it.
+- `ui_scroll(direction=down|up, package=net.thunderbird.android)` navigates a mail
+  list or long body. `ui_type` can restrict typing to the mail app's focused editor.
+- To reply, open the original message and use its Reply button so the thread and
+  recipients are retained. Check the sender account and recipient before sending,
+  and confirm the result in Thunderbird.
+
+Try: “Thunderbird에서 최근 메일 읽어줘” or “이 메일에 답장 초안 작성해줘”. A send
+request uses the app's Send button through the existing mutating-tool approval.
+Mail opening and composition also accept an optional `package` for another app.
+
+The bundled mail workflow is available after updating the binary without rerunning
+setup. User-edited skills are preserved. The exact former stock notification-only
+Kakao skill is upgraded in memory; its legacy copy exists only for that comparison.
+Reading depends on the app's accessible screen content and does not provide a
+background mailbox API. Live-device verification is needed for the installed app.
 
 ## Companion app — notifications & reply (experimental)
 
@@ -236,14 +267,11 @@ app's inline **RemoteInput** reply. It exposes a loopback-only HTTP bridge on
 - `notif_list` (ReadOnly) — recent notifications (`pkg`, `title`, `text`, `key`, `canReply`)
 - `notif_reply` (Mutating, `y/N`) — send an inline reply to a notification `key`
 
-Unlike screen-reading, this **can actually reply** — and it reads incoming messages in the
-**background with no app switch** (no foregrounding KakaoTalk). These tools are registered
-by default. The bundled `kakao_read` skill summarizes unread KakaoTalk notifications and, on
-request, sends an inline reply — this is the default path for "카톡 요약 / 카톡 뭐 왔어".
-Unlike screen-reading, this **can actually reply** — and it reads incoming messages in the
-**background with no app switch** (no foregrounding KakaoTalk). These tools are registered
-by default. The bundled `kakao_read` skill summarizes unread KakaoTalk notifications and, on
-request, sends an inline reply — this is the default path for "카톡 요약 / 카톡 뭐 왔어".
+Notifications allow replies in the background without switching apps. When no
+replyable notification is available, the bundled `kakao_read` skill opens the
+conversation and uses its reply field and Send button. Missing notifications do
+not prove there are no unread messages. Both routes keep the existing tool
+approval behavior.
 
 Setup:
 
@@ -298,6 +326,6 @@ Sent.
 
 ## Status
 
-v0 — two backends (llama.cpp default / ollama), six read tools + five mutating tools
-(approval-gated), plus experimental companion phone-UI tools behind `USIX_UI`, streaming markdown
-TUI. Licensed under MIT.
+v0 — two backends (llama.cpp default / ollama), device and file tools, companion
+notifications, phone-UI control, Thunderbird mail workflows, and a streaming markdown
+TUI. Mutating tools require approval. Licensed under MIT.

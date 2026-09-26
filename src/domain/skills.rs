@@ -6,6 +6,11 @@ use std::path::PathBuf;
 // 소형 로컬 모델 컨텍스트 보호 — 한 번에 활성화되는 스킬 상한.
 const MAX_ACTIVE: usize = 8;
 
+const MAIL_SKILL: &str = include_str!("../../skills/mail.md");
+const KAKAO_SKILL: &str = include_str!("../../skills/kakao_read.md");
+// Exact legacy text is retained only to recognize the previously installed stock skill.
+const LEGACY_KAKAO_SKILL: &str = include_str!("../../skills/legacy/kakao_read.md");
+
 pub struct Skill {
     pub name: String,
     pub description: String,
@@ -22,7 +27,7 @@ pub fn skills_dir() -> PathBuf {
 pub fn load() -> Vec<Skill> {
     let mut out = Vec::new();
     let Ok(entries) = fs::read_dir(skills_dir()) else {
-        return out;
+        return with_builtins(out);
     };
     let mut paths: Vec<PathBuf> = entries
         .flatten()
@@ -32,7 +37,7 @@ pub fn load() -> Vec<Skill> {
     paths.sort();
     for p in paths {
         if let Ok(text) = fs::read_to_string(&p) {
-            if let Some(s) = parse(&text) {
+            if let Some(s) = parse_installed(&text) {
                 out.push(s);
                 if out.len() >= MAX_ACTIVE {
                     break;
@@ -40,7 +45,26 @@ pub fn load() -> Vec<Skill> {
             }
         }
     }
-    out
+    with_builtins(out)
+}
+
+fn parse_installed(text: &str) -> Option<Skill> {
+    // Upgrade the exact former default in memory while preserving all user-edited skills.
+    parse(if text == LEGACY_KAKAO_SKILL {
+        KAKAO_SKILL
+    } else {
+        text
+    })
+}
+
+fn with_builtins(mut skills: Vec<Skill>) -> Vec<Skill> {
+    for text in [MAIL_SKILL, KAKAO_SKILL] {
+        let skill = parse(text).expect("bundled skill has frontmatter");
+        if skills.len() < MAX_ACTIVE && !skills.iter().any(|s| s.name == skill.name) {
+            skills.push(skill);
+        }
+    }
+    skills
 }
 
 /// 얇은 frontmatter 파서 — 첫 `---` 블록의 name/description + 이후 본문.
@@ -124,6 +148,37 @@ pub fn guidance(skills: &[&Skill]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mail_is_available_after_upgrade_without_running_setup() {
+        let skills = with_builtins(Vec::new());
+        assert!(select(&skills, "Thunderbird 메일 읽어줘")
+            .iter()
+            .any(|s| s.name == "mail"));
+        let custom = Skill {
+            name: "mail".into(),
+            description: "custom".into(),
+            body: "keep me".into(),
+        };
+        let skills = with_builtins(vec![custom]);
+        assert_eq!(skills.iter().filter(|s| s.name == "mail").count(), 1);
+        assert_eq!(
+            skills.iter().find(|s| s.name == "mail").unwrap().body,
+            "keep me"
+        );
+    }
+
+    #[test]
+    fn only_the_exact_legacy_stock_skill_is_upgraded() {
+        let updated = parse_installed(LEGACY_KAKAO_SKILL).unwrap();
+        assert!(updated.body.contains("ui_scroll"));
+        assert!(!updated.body.contains("안 읽은 카톡이 없다"));
+        let edited = format!("{LEGACY_KAKAO_SKILL}\ncustom instruction");
+        assert!(parse_installed(&edited)
+            .unwrap()
+            .body
+            .contains("custom instruction"));
+    }
 
     #[test]
     fn parses_frontmatter_and_body() {

@@ -71,6 +71,9 @@ pub fn bridge_err(e: ureq::Error) -> anyhow::Error {
         ureq::Error::Status(503, _) => anyhow!(
             "접근성 서비스 꺼짐 — usix-companion 앱에서 '접근성(화면 제어)' 권한을 켜라."
         ),
+        ureq::Error::Status(404, _) => anyhow!(
+            "이 기능을 지원하지 않는 companion 버전 — usix-companion 앱도 함께 업데이트하라."
+        ),
         other => anyhow!(
             "companion 브리지 무응답 — usix-companion 앱을 설치·실행하고 필요한 권한(알림 접근/접근성)을 켰는지 확인하라. ({other})"
         ),

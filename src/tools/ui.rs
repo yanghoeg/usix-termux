@@ -37,7 +37,7 @@ fn required_str<'a>(args: &'a Value, key: &str) -> Result<&'a str> {
 }
 
 /// {ok:bool} 응답을 성공 메시지 또는 에러로 변환.
-fn expect_ok(body: &Value, on_ok: String, on_fail: &str) -> Result<String> {
+pub(super) fn expect_ok(body: &Value, on_ok: String, on_fail: &str) -> Result<String> {
     if body.get("ok").and_then(|v| v.as_bool()) == Some(true) {
         Ok(on_ok)
     } else {
@@ -50,11 +50,19 @@ fn expect_ok(body: &Value, on_ok: String, on_fail: &str) -> Result<String> {
 }
 
 /// 패키지명 인젝션 가드 — /screen·/open 은 브리지가 그대로 쓰므로 charset 을 제한한다.
-fn valid_pkg(pkg: &str) -> bool {
-    !pkg.is_empty()
-        && pkg
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '_')
+pub(super) fn valid_pkg(pkg: &str) -> bool {
+    pkg.contains('.')
+        && pkg.split('.').all(|part| {
+            !part.is_empty() && part.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+        })
+}
+
+fn optional_package(args: &Value) -> Result<Option<&str>> {
+    match args.get("package") {
+        None => Ok(None),
+        Some(Value::String(pkg)) if valid_pkg(pkg) => Ok(Some(pkg)),
+        _ => Err(anyhow!("package 는 앱 패키지명이어야 함")),
+    }
 }
 
 /// /screen JSON 배열 → Elem 벡터. (순수: 기기 불필요, 테스트 가능)
@@ -289,7 +297,8 @@ impl Tool for UiType {
         json!({
             "type": "object",
             "properties": {
-                "text": { "type": "string", "description": "입력할 텍스트" }
+                "text": { "type": "string", "description": "입력할 텍스트" },
+                "package": { "type": "string", "description": "이 앱의 포커스된 입력창에만 입력 (예: net.thunderbird.android)" }
             },
             "required": ["text"]
         })
@@ -302,9 +311,14 @@ impl Tool for UiType {
         if text.is_empty() {
             return Err(anyhow!("빈 텍스트"));
         }
-        let body = bridge_post("/type", json!({ "text": text }))?;
+        let pkg = optional_package(args)?;
+        let mut request = json!({ "text": text });
+        if let Some(pkg) = pkg {
+            request["package"] = json!(pkg);
+        }
+        let body = bridge_post("/type", request)?;
         expect_ok(&body, String::new(), "입력 실패(포커스된 입력창 없음)")?;
-        let screen = dump_and_cache(None)?;
+        let screen = dump_and_cache(pkg)?;
         Ok(format!("입력함(\"{text}\"). 현재 화면:\n{screen}"))
     }
 }
@@ -331,9 +345,53 @@ impl Tool for UiBack {
     }
 }
 
+pub struct UiScroll;
+impl Tool for UiScroll {
+    fn name(&self) -> &str {
+        "ui_scroll"
+    }
+    fn description(&self) -> &str {
+        "메일 목록·긴 본문·대화 화면을 위(up) 또는 아래(down)로 스크롤하고 새 화면을 읽는다. package를 주면 그 앱에서만 동작한다. 끝에 도달하면 반복하지 않는다."
+    }
+    fn parameters(&self) -> Value {
+        json!({ "type": "object", "properties": {
+            "direction": { "type": "string", "enum": ["down", "up"] },
+            "package": { "type": "string", "description": "스크롤할 앱 패키지명 (예: net.thunderbird.android)" }
+        }, "required": ["direction"] })
+    }
+    fn approval(&self) -> ApprovalClass {
+        ApprovalClass::Mutating
+    }
+    fn run(&self, args: &Value) -> Result<String> {
+        let direction = required_str(args, "direction")?;
+        if !matches!(direction, "up" | "down") {
+            return Err(anyhow!("direction 은 up 또는 down 이어야 함"));
+        }
+        let pkg = optional_package(args)?;
+        let mut request = json!({ "direction": direction });
+        if let Some(pkg) = pkg {
+            request["package"] = json!(pkg);
+        }
+        let body = bridge_post("/scroll", request)?;
+        expect_ok(&body, String::new(), "스크롤 실패 또는 끝에 도달함")?;
+        let screen = dump_and_cache(pkg)?;
+        Ok(format!("스크롤함({direction}). 현재 화면:\n{screen}"))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn scroll_and_typing_reject_bad_scope_before_network() {
+        assert!(UiScroll.run(&json!({"direction":"left"})).is_err());
+        assert!(UiScroll
+            .run(&json!({"direction":"down", "package":null}))
+            .is_err());
+        assert!(UiType.run(&json!({"text":"reply", "package":""})).is_err());
+        assert!(matches!(UiScroll.approval(), ApprovalClass::Mutating));
+    }
 
     fn elem(text: &str, editable: bool) -> Elem {
         Elem {

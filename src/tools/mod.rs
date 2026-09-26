@@ -1,6 +1,7 @@
 pub mod bridge;
 pub mod comms;
 pub mod companion;
+pub mod email;
 pub mod read;
 pub mod shell;
 pub mod ui;
@@ -29,6 +30,9 @@ pub fn default_tools() -> Vec<Box<dyn Tool>> {
     tools.push(Box::new(ui::UiTapText));
     tools.push(Box::new(ui::UiType));
     tools.push(Box::new(ui::UiBack));
+    tools.push(Box::new(ui::UiScroll));
+    tools.push(Box::new(email::EmailOpen));
+    tools.push(Box::new(email::EmailCompose));
     // 알림 브리지(컴패니언 앱) — 카톡·라인 알림 읽기/인라인 답장. kakao_read 스킬의 기본 경로라 항상 등록.
     tools.push(Box::new(companion::NotifList));
     tools.push(Box::new(companion::NotifReply));

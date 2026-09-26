@@ -321,6 +321,7 @@ pub fn setup() -> Result<()> {
 // 예시 스킬을 바이너리에 담아 배포 — 재빌드 없이 마크다운으로 능력을 늘리는 진입점.
 const SMS_REPLY_SKILL: &str = include_str!("../skills/sms_reply.md");
 const KAKAO_READ_SKILL: &str = include_str!("../skills/kakao_read.md");
+const MAIL_SKILL: &str = include_str!("../skills/mail.md");
 
 /// 스킬 하나를 ~/.usix/skills/ 에 심는다(없을 때만).
 fn seed_skill(name: &str, body: &str) {
@@ -338,6 +339,7 @@ fn seed_skill(name: &str, body: &str) {
 fn seed_skills() {
     seed_skill("sms_reply.md", SMS_REPLY_SKILL);
     seed_skill("kakao_read.md", KAKAO_READ_SKILL);
+    seed_skill("mail.md", MAIL_SKILL);
 }
 
 /// termux-api 브리지 생존 점검 — 바이너리 존재만으론 부족하다. 실제 termux-* 를 짧게
