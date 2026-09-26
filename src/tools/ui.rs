@@ -30,6 +30,11 @@ fn last() -> &'static Mutex<Vec<Elem>> {
     LAST.get_or_init(|| Mutex::new(Vec::new()))
 }
 
+/// A new task must not inherit another task's numbered screen elements.
+pub(crate) fn clear_cache() {
+    last().lock().unwrap().clear();
+}
+
 fn required_str<'a>(args: &'a Value, key: &str) -> Result<&'a str> {
     args.get(key)
         .and_then(|v| v.as_str())
@@ -197,6 +202,9 @@ impl Tool for AppOpen {
 
 pub struct UiTap;
 impl Tool for UiTap {
+    fn requires_fresh_screen(&self) -> bool {
+        true
+    }
     fn name(&self) -> &str {
         "ui_tap"
     }
@@ -244,6 +252,9 @@ impl Tool for UiTap {
 
 pub struct UiTapText;
 impl Tool for UiTapText {
+    fn requires_fresh_screen(&self) -> bool {
+        true
+    }
     fn name(&self) -> &str {
         "ui_tap_text"
     }
@@ -287,6 +298,9 @@ impl Tool for UiTapText {
 
 pub struct UiType;
 impl Tool for UiType {
+    fn requires_fresh_screen(&self) -> bool {
+        true
+    }
     fn name(&self) -> &str {
         "ui_type"
     }
@@ -325,6 +339,9 @@ impl Tool for UiType {
 
 pub struct UiBack;
 impl Tool for UiBack {
+    fn requires_fresh_screen(&self) -> bool {
+        true
+    }
     fn name(&self) -> &str {
         "ui_back"
     }
@@ -347,6 +364,9 @@ impl Tool for UiBack {
 
 pub struct UiScroll;
 impl Tool for UiScroll {
+    fn requires_fresh_screen(&self) -> bool {
+        true
+    }
     fn name(&self) -> &str {
         "ui_scroll"
     }

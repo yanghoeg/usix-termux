@@ -168,7 +168,7 @@ fn is_terminal_control(c: char) -> bool {
 }
 
 /// 모델·파일·알림·셸에서 온 문자열이 터미널 제어 시퀀스로 해석되지 않게 한다.
-fn sanitize_terminal_text(text: &str) -> String {
+pub(crate) fn sanitize_terminal_text(text: &str) -> String {
     text.chars()
         .map(|c| if is_terminal_control(c) { '�' } else { c })
         .collect()

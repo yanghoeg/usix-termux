@@ -3,6 +3,7 @@ mod adapters;
 mod bootstrap;
 mod domain;
 mod ports;
+mod tasks;
 mod tools;
 mod tui;
 
@@ -19,8 +20,12 @@ fn main() -> anyhow::Result<()> {
         Some("setup") => bootstrap::setup()?,
         Some("doctor") => bootstrap::doctor()?,
         Some("pair") => bootstrap::pair(args.get(1).map(String::as_str))?,
+        Some("task") => tasks::command(&args[1..])?,
+        Some("worker") => tasks::worker(&args[1..])?,
         Some("-c") => one_shot(&args[1..].join(" "))?,
         Some("chat") | None => {
+            let store = tasks::store::Store::default_location()?;
+            let _execution = store.execution_lock()?;
             let _serve = bootstrap::BackendServeGuard::start()?;
             let llm = backend();
             let registry = Registry::new(tools::default_tools());
@@ -62,6 +67,8 @@ fn model_label() -> String {
 
 // 대화형 없이 한 번 질문 — 변경 도구는 안전하게 자동 거부.
 fn one_shot(q: &str) -> anyhow::Result<()> {
+    let store = tasks::store::Store::default_location()?;
+    let _execution = store.execution_lock()?;
     let _serve = bootstrap::BackendServeGuard::start()?;
     let llm = backend();
     let registry = Registry::new(tools::default_tools());
@@ -79,6 +86,8 @@ fn one_shot(q: &str) -> anyhow::Result<()> {
                     "[skipped] mutating actions are only approved in interactive TUI: {desc}"
                 );
                 agent.approve(false)?;
+                // Do not ask the model again after denial: it may report a skipped action as done.
+                break;
             }
         }
     }
@@ -94,6 +103,8 @@ fn print_help() {
          usix-termux doctor     check prerequisites\n  \
          usix-termux pair [tok] save the usix-companion bridge token (clipboard/stdin if omitted)\n  \
          usix-termux -c \"query\"  one-shot query (non-interactive)\n\n\
+         usix-termux task --help  durable tasks and schedules\n  \
+         usix-termux worker       process due tasks; pause for approvals\n\n\
          Environment:\n  \
          USIX_BACKEND  llama (default) | ollama\n  \
          USIX_MODEL    llama=GGUF path (default ~/models/Qwen3.5-2B-Q5_K_M.gguf)\n                \

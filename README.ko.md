@@ -43,6 +43,8 @@ cargo build --release && ./target/release/usix-termux setup
 - 🔒 **승인 게이트** — 읽기 도구는 자동 실행, 변경 도구는 먼저 `y/N` 확인
 - 📱 **폰 규모 TUI** — 인라인 입력 박스, `Thinking…` 타이머, 스트리밍 마크다운
 - 🧩 **헥사고날 코어** — 도메인을 건드리지 않고 LLM 백엔드 교체·도구 추가
+- **작업 저장과 예약 실행** — 여러 단계의 작업을 저장하고 백그라운드에서 실행하며,
+  승인이 필요한 지점부터 이어서 진행. [작업 안내](docs/tasks.md).
 
 ## 구조
 
@@ -114,6 +116,8 @@ usix-termux            # 대화형 TUI
 usix-termux setup      # 백엔드 설치 + 모델 다운로드 + 서버 기동
 usix-termux doctor     # 전제조건 점검
 usix-termux -c "..."   # 한 번 질문 (비대화형; 변경 도구는 자동 거부)
+usix-termux task --help # 작업 저장, 예약, 반복 실행, 중단 후 재개
+usix-termux worker     # 실행 시각이 된 작업 처리; 변경 작업은 승인 대기
 ```
 
 ### 환경변수

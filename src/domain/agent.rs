@@ -4,7 +4,8 @@
 use crate::domain::registry::Registry;
 use crate::domain::skills::Skill;
 use crate::ports::{ApprovalClass, Llm};
-use anyhow::Result;
+use anyhow::{ensure, Result};
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::VecDeque;
 
@@ -27,6 +28,15 @@ pub enum Turn {
     Answer(String),
     /// 변경 도구 실행 대기 — UI가 사람 승인을 받아 approve()를 호출해야 한다.
     NeedApproval { desc: String },
+}
+
+/// A task checkpoint includes tool results and the exact pending approval.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct AgentState {
+    messages: Vec<Value>,
+    pending: VecDeque<Value>,
+    awaiting: Option<Value>,
+    steps: usize,
 }
 
 pub struct Agent<'a> {
@@ -70,91 +80,206 @@ impl<'a> Agent<'a> {
         self.steps = 0;
     }
 
+    pub fn checkpoint(&self) -> AgentState {
+        AgentState {
+            messages: self.messages.clone(),
+            pending: self.pending.clone(),
+            awaiting: self.awaiting.clone(),
+            steps: self.steps,
+        }
+    }
+
+    pub fn restore(llm: &'a dyn Llm, registry: &'a Registry, state: AgentState) -> Result<Self> {
+        ensure!(
+            state.messages.first().and_then(|m| m["role"].as_str()) == Some("system"),
+            "invalid task checkpoint: missing system message"
+        );
+        ensure!(
+            state.steps <= MAX_STEPS,
+            "invalid task checkpoint: step count"
+        );
+        let mut agent = Self::new(llm, registry);
+        agent.messages = state.messages;
+        agent.pending = state.pending;
+        agent.awaiting = state.awaiting;
+        agent.steps = state.steps;
+        let pending_screen = agent
+            .awaiting
+            .iter()
+            .chain(agent.pending.iter())
+            .any(|call| {
+                let (name, _) = parse_call(call);
+                registry
+                    .get(&name)
+                    .is_some_and(|tool| tool.requires_fresh_screen())
+            });
+        let observed_screen = agent.messages.iter().any(|message| {
+            message
+                .get("tool_calls")
+                .and_then(Value::as_array)
+                .is_some_and(|calls| {
+                    calls.iter().any(|call| {
+                        let (name, _) = parse_call(call);
+                        name == "ui_dump"
+                            || registry
+                                .get(&name)
+                                .is_some_and(|tool| tool.requires_fresh_screen())
+                    })
+                })
+        });
+        if pending_screen || observed_screen {
+            // Clear the entire unexecuted batch: sibling actions may depend on the
+            // expired screen action. Keep every original call paired with a result.
+            let calls: Vec<_> = agent
+                .awaiting
+                .take()
+                .into_iter()
+                .chain(agent.pending.drain(..))
+                .collect();
+            for call in calls {
+                agent.push_tool_result(&call_id(&call),
+                    "Not executed. The task resumed after a pause and its screen observation expired. Read ui_dump and plan the remaining actions again.".into());
+            }
+            ensure!(
+                registry
+                    .get("ui_dump")
+                    .is_some_and(|tool| tool.approval() == ApprovalClass::ReadOnly),
+                "cannot resume a screen task without the read-only ui_dump tool"
+            );
+            // Refresh through the ordinary tool loop, so the real observation is
+            // recorded before the model can propose a replacement screen action.
+            let mut observation = json!({"role": "assistant", "tool_calls": [{
+                "type": "function", "function": {"name": "ui_dump", "arguments": {}}
+            }]});
+            ensure_call_ids(&mut observation, agent.messages.len());
+            agent
+                .pending
+                .push_back(observation["tool_calls"][0].clone());
+            agent.messages.push(observation);
+        }
+        const RESUME_NOTE: &str = "\nThis task resumed after a pause. The screen may have changed. Read ui_dump before planning any screen-dependent action.";
+        if let Some(content) = agent.messages[0]["content"].as_str() {
+            if !content.contains(RESUME_NOTE) {
+                agent.messages[0]["content"] = json!(format!("{content}{RESUME_NOTE}"));
+            }
+        }
+        Ok(agent)
+    }
+
     /// Answer 또는 NeedApproval 이 나올 때까지 진행. 최종 답변 content 는 `sink` 로
     /// 토큰 단위 스트리밍된다(도구 호출 턴은 content 가 없어 sink 미호출).
     pub fn advance(&mut self, sink: &mut dyn FnMut(&str)) -> Result<Turn> {
         loop {
-            // 1) 대기 중인 도구 호출을 먼저 소진.
-            while let Some(call) = self.pending.front().cloned() {
-                let (name, args) = parse_call(&call);
-                let id = call_id(&call);
-                match self.registry.get(&name) {
-                    None => {
-                        self.pending.pop_front();
-                        self.push_tool_result(&id, format!("알 수 없는 도구: {name}"));
-                    }
-                    Some(t) if t.approval() == ApprovalClass::Mutating => {
-                        // 승인 대기로 넘기고 UI에 알림.
-                        self.pending.pop_front();
-                        self.awaiting = Some(call);
-                        return Ok(Turn::NeedApproval {
-                            desc: format!("{name} {args}"),
-                        });
-                    }
-                    Some(t) => {
-                        let result = t.run(&args).unwrap_or_else(|e| format!("도구 오류: {e}"));
-                        self.pending.pop_front();
-                        self.push_tool_result(
-                            &id,
-                            if result.is_empty() {
-                                "(완료)".into()
-                            } else {
-                                result
-                            },
-                        );
-                    }
-                }
+            if let Some(turn) = self.advance_step(sink)? {
+                return Ok(turn);
             }
-
-            // 2) 무한 루프 차단.
-            self.steps += 1;
-            if self.steps > MAX_STEPS {
-                return Ok(Turn::Answer("(도구 호출이 너무 많아 중단했습니다)".into()));
-            }
-
-            // 3) 모델 호출 (최종 답변은 sink 로 스트리밍).
-            let mut msg = self
-                .llm
-                .chat_stream(&self.messages, &self.tools_schema, sink)?;
-            // 백엔드가 tool_call id 를 안 주면(ollama 등) 여기서 채운다 — 없으면 취소·결과
-            // 응답의 tool_call_id 가 어긋나 대화가 깨진다. assistant 메시지로 저장하기 전에
-            // 손봐서 저장본과 pending 이 같은 id 를 갖게 한다.
-            ensure_call_ids(&mut msg, self.messages.len());
-            self.messages.push(msg.clone());
-
-            let calls = msg
-                .get("tool_calls")
-                .and_then(|v| v.as_array())
-                .cloned()
-                .unwrap_or_default();
-
-            if calls.is_empty() {
-                let content = msg
-                    .get("content")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .to_string();
-                if content.is_empty() {
-                    // Hammer 등 일부 3B 는 도구가 필요 없을 때 답변 대신 빈 도구배열("[]")
-                    // 노이즈를 낸다 → content 가 비어 빈 답이 나간다. 도구 없이 한 번 더
-                    // 물어 자연어 답을 받는다.
-                    return Ok(Turn::Answer(self.answer_without_tools(sink)?));
-                }
-                return Ok(Turn::Answer(content));
-            }
-            self.pending.extend(calls);
         }
+    }
+
+    /// Execute one model request or read-only tool, then allow durable checkpointing.
+    /// A restored approval is reported again until the caller explicitly decides it.
+    pub fn advance_step(&mut self, sink: &mut dyn FnMut(&str)) -> Result<Option<Turn>> {
+        if let Some(call) = &self.awaiting {
+            let (name, args) = parse_call(call);
+            return Ok(Some(Turn::NeedApproval {
+                desc: format!("{name} {args}"),
+            }));
+        }
+        // 1) 대기 중인 도구 호출을 먼저 소진.
+        if let Some(call) = self.pending.front().cloned() {
+            let (name, args) = parse_call(&call);
+            let id = call_id(&call);
+            match self.registry.get(&name) {
+                None => {
+                    self.pending.pop_front();
+                    self.push_tool_result(&id, format!("알 수 없는 도구: {name}"));
+                }
+                Some(t) if t.approval() == ApprovalClass::Mutating => {
+                    // 승인 대기로 넘기고 UI에 알림.
+                    self.pending.pop_front();
+                    self.awaiting = Some(call);
+                    return Ok(Some(Turn::NeedApproval {
+                        desc: format!("{name} {args}"),
+                    }));
+                }
+                Some(t) => {
+                    let result = t.run(&args).unwrap_or_else(|e| format!("도구 오류: {e}"));
+                    self.pending.pop_front();
+                    self.push_tool_result(
+                        &id,
+                        if result.is_empty() {
+                            "(완료)".into()
+                        } else {
+                            result
+                        },
+                    );
+                }
+            }
+            return Ok(None);
+        }
+
+        // 2) 무한 루프 차단.
+        ensure!(
+            self.steps < MAX_STEPS,
+            "tool-call step limit ({MAX_STEPS}) reached"
+        );
+
+        // 3) 모델 호출 (최종 답변은 sink 로 스트리밍).
+        let mut msg = self
+            .llm
+            .chat_stream(&self.messages, &self.tools_schema, sink)?;
+        self.steps += 1;
+        // 백엔드가 tool_call id 를 안 주면(ollama 등) 여기서 채운다 — 없으면 취소·결과
+        // 응답의 tool_call_id 가 어긋나 대화가 깨진다. assistant 메시지로 저장하기 전에
+        // 손봐서 저장본과 pending 이 같은 id 를 갖게 한다.
+        ensure_call_ids(&mut msg, self.messages.len());
+
+        let calls = msg
+            .get("tool_calls")
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default();
+        ensure!(
+            calls.len() <= 32,
+            "model returned too many tool calls in one step"
+        );
+        self.messages.push(msg.clone());
+
+        if calls.is_empty() {
+            let content = msg
+                .get("content")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            if content.trim().is_empty() {
+                // Hammer 등 일부 3B 는 도구가 필요 없을 때 답변 대신 빈 도구배열("[]")
+                // 노이즈를 낸다 → content 가 비어 빈 답이 나간다. 도구 없이 한 번 더
+                // 물어 자연어 답을 받는다.
+                let answer = self.answer_without_tools(sink)?;
+                return Ok(Some(Turn::Answer(answer)));
+            }
+            return Ok(Some(Turn::Answer(content)));
+        }
+        self.pending.extend(calls);
+        Ok(None)
     }
 
     /// 방금 저장한 빈 assistant 응답을 걷어내고, 도구 스키마 없이 다시 물어 자연어 답을 받는다.
     fn answer_without_tools(&mut self, sink: &mut dyn FnMut(&str)) -> Result<String> {
         self.messages.pop();
         let msg = self.llm.chat_stream(&self.messages, &[], sink)?;
+        ensure!(
+            msg.get("tool_calls")
+                .and_then(Value::as_array)
+                .is_none_or(Vec::is_empty),
+            "model returned tool calls when asked for a final answer"
+        );
         let content = msg
             .get("content")
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_string();
+        ensure!(!content.trim().is_empty(), "model returned an empty answer");
         self.messages.push(msg);
         Ok(content)
     }

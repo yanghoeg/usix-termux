@@ -4,6 +4,7 @@ pub mod companion;
 pub mod email;
 pub mod read;
 pub mod shell;
+pub mod tasks;
 pub mod ui;
 
 use crate::ports::Tool;
@@ -22,6 +23,9 @@ pub fn default_tools() -> Vec<Box<dyn Tool>> {
         Box::new(shell::ReadFile),
         Box::new(shell::WriteFile),
         Box::new(shell::ListDir),
+        Box::new(tasks::TaskCreate),
+        Box::new(tasks::TaskList),
+        Box::new(tasks::TaskCancel),
     ];
     // 폰 UI 컨트롤 — companion 앱 접근성 서비스 필요(루트·adb 불필요). 기본 등록.
     tools.push(Box::new(ui::Screen));

@@ -28,6 +28,10 @@ pub trait Tool: Send + Sync {
     fn parameters(&self) -> Value;
     /// 실행 전 승인 등급.
     fn approval(&self) -> ApprovalClass;
+    /// Screen-dependent calls must be planned again after a task leaves the process.
+    fn requires_fresh_screen(&self) -> bool {
+        false
+    }
     /// 모델이 채운 인자로 실행하고 사람이 읽을 결과 문자열을 돌려준다.
     fn run(&self, args: &Value) -> Result<String>;
 }

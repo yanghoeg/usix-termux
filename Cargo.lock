@@ -751,6 +751,7 @@ version = "0.0.1"
 dependencies = [
  "anyhow",
  "crossterm",
+ "libc",
  "ratatui",
  "serde",
  "serde_json",

@@ -45,6 +45,8 @@ example skill. Phone tools also need the **Termux:API app** (F-Droid) — see
 - 🔒 **Approval gate** — read-only tools run automatically; mutating tools ask `y/N` first
 - 📱 **Phone-scale TUI** — inline input box, live `Thinking…` timer, streaming markdown
 - 🧩 **Hexagonal core** — swap the LLM backend or add tools without touching the domain
+- **Persistent tasks and schedules** — save multi-step work, run a background worker,
+  and resume pending approvals. [Task guide](docs/tasks.md).
 
 ## Architecture
 
@@ -116,6 +118,8 @@ usix-termux            # interactive TUI
 usix-termux setup      # install backend + download model + start server
 usix-termux doctor     # check prerequisites
 usix-termux -c "..."   # one-shot query (non-interactive; mutating tools auto-denied)
+usix-termux task --help # saved tasks, delayed work, recurring schedules, and recovery
+usix-termux worker     # process due tasks; changing actions wait for human approval
 ```
 
 ### Environment
