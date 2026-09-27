@@ -1,7 +1,7 @@
 // TOOLS — usix-companion 브리지(127.0.0.1:8760) 공용 클라이언트.
 // 안드로이드는 모든 앱이 같은 loopback 을 공유하므로 포트만으론 호출자를 가릴 수 없다.
 // → 앱이 발급한 토큰(~/.usix/companion_token)을 Bearer 헤더로 보내고, 서버가 대조한다.
-// 페어링은 `usix-termux pair` 1회. 모든 요청에 연결·읽기 타임아웃을 둬 브리지가 멎어도 에이전트가 안 굳는다.
+// 페어링은 `usix-code pair` 1회. 모든 요청에 연결·읽기 타임아웃을 둬 브리지가 멎어도 에이전트가 안 굳는다.
 use anyhow::{anyhow, Result};
 use serde_json::Value;
 use std::path::PathBuf;
@@ -66,7 +66,7 @@ fn with_auth(req: ureq::Request) -> ureq::Request {
 pub fn bridge_err(e: ureq::Error) -> anyhow::Error {
     match e {
         ureq::Error::Status(401, _) => anyhow!(
-            "companion 토큰 불일치/없음 — 앱에서 '토큰 복사' 후 `usix-termux pair` 를 실행하라."
+            "companion 토큰 불일치/없음 — 앱에서 '토큰 복사' 후 `usix-code pair` 를 실행하라."
         ),
         ureq::Error::Status(503, _) => anyhow!(
             "접근성 서비스 꺼짐 — usix-companion 앱에서 '접근성(화면 제어)' 권한을 켜라."

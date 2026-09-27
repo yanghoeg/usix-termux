@@ -9,16 +9,13 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::VecDeque;
 
-const SYSTEM_PROMPT: &str = "너는 안드로이드 Termux 폰 비서다. \
-필요하면 제공된 도구를 호출해 실제 폰 정보를 조회하거나 작업한다. \
-문자 발송·전화 걸기 같은 변경 작업은 반드시 도구로만 수행한다. \
-전화번호를 모르면 절대 임의로 지어내지 말고 contacts 도구로 이름을 조회해 번호를 찾는다. \
-sms_send 의 number 에는 contacts 로 찾은 실제 숫자만 넣는다. \
-이름이나 '부인 전화번호' 같은 자리표시자를 number 에 넣지 마라. \
-번호를 아직 모르면 sms_send 를 부르지 말고, 그 턴에는 contacts 만 호출해 번호부터 받는다. \
-조회해도 없으면 번호를 추측하지 말고 사용자에게 번호를 물어본다. \
-사용자가 준 메시지 문구는 그대로 보낸다(이름으로 오해해 문장을 새로 짓지 않는다). \
-도구 결과를 바탕으로 한국어로 간결하게 답한다.";
+const SYSTEM_PROMPT: &str = "You are usix-code, a fully local coding and automation harness on this device. \
+Use the provided tools to inspect the working environment and complete the user's task. \
+Use only registered tools; do not assume an operating system, cloud service, or remote machine. \
+Perform changes, shell commands, and message sending only through tools with human approval. \
+Never invent paths, recipients, or results; verify them with tools. Preserve user-supplied message text. \
+Use English for planning and tool work. Write concise final answers and user-facing choices in Korean \
+unless the user requests another language. Distinguish completed actions from unverified outcomes.";
 
 // 도구 호출 폭주 방지 (모델이 무한 호출하는 경우 차단).
 const MAX_STEPS: usize = 16;
@@ -51,7 +48,7 @@ pub struct Agent<'a> {
 }
 
 impl<'a> Agent<'a> {
-    pub fn new(llm: &'a dyn Llm, registry: &'a Registry) -> Self {
+    pub fn new(llm: &'a dyn Llm, registry: &'a Registry, skills: Vec<Skill>) -> Self {
         // 스킬은 로드만 해두고, 프롬프트에는 submit에서 요청 관련분만 얹는다. 무관한
         // 스킬 지침이 끼면 소형 모델이 후속 절차를 놓쳐(빈 응답) 흐름이 깨진다.
         let system = json!({ "role": "system", "content": SYSTEM_PROMPT });
@@ -63,7 +60,7 @@ impl<'a> Agent<'a> {
             pending: VecDeque::new(),
             awaiting: None,
             steps: 0,
-            skills: crate::domain::skills::load(),
+            skills,
         }
     }
 
@@ -89,7 +86,12 @@ impl<'a> Agent<'a> {
         }
     }
 
-    pub fn restore(llm: &'a dyn Llm, registry: &'a Registry, state: AgentState) -> Result<Self> {
+    pub fn restore(
+        llm: &'a dyn Llm,
+        registry: &'a Registry,
+        state: AgentState,
+        skills: Vec<Skill>,
+    ) -> Result<Self> {
         ensure!(
             state.messages.first().and_then(|m| m["role"].as_str()) == Some("system"),
             "invalid task checkpoint: missing system message"
@@ -98,8 +100,18 @@ impl<'a> Agent<'a> {
             state.steps <= MAX_STEPS,
             "invalid task checkpoint: step count"
         );
-        let mut agent = Self::new(llm, registry);
+        let mut agent = Self::new(llm, registry, skills);
         agent.messages = state.messages;
+        // Refresh guidance when a checkpoint moves between hosts or the harness is upgraded.
+        let query = agent
+            .messages
+            .iter()
+            .rev()
+            .find(|m| m["role"] == "user")
+            .and_then(|m| m["content"].as_str())
+            .unwrap_or("");
+        let relevant = crate::domain::skills::select(&agent.skills, query);
+        agent.messages[0] = json!({"role": "system", "content": format!("{SYSTEM_PROMPT}{}", crate::domain::skills::guidance(&relevant))});
         agent.pending = state.pending;
         agent.awaiting = state.awaiting;
         agent.steps = state.steps;

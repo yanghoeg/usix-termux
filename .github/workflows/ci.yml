@@ -1,0 +1,26 @@
+name: Native harness checks
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - run: cargo fmt --check
+      - run: cargo test --locked
+      - run: cargo clippy --locked --all-targets -- -D warnings
+      - run: python3 tests/install_smoke.py
+      - run: sh install.sh --prefix "$RUNNER_TEMP/usix-code"
+      - run: '"$RUNNER_TEMP/usix-code/bin/usix-code" --version'
+  android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+      - run: cargo check --locked --target aarch64-linux-android

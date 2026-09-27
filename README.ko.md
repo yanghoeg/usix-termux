@@ -1,296 +1,148 @@
-# usix-termux
+# usix-code
 
 [English](README.md) · **한국어**
 
-안드로이드 [Termux](https://termux.dev)용 로컬 LLM 폰 에이전트. [usix](https://github.com/)의
-설계 — **function-calling 도구 + ApprovalClass 권한 게이팅 + 헥사고날 ports/adapters 코어** —
-를 폰 규모로 축약해, 로컬 LLM(**llama.cpp** 기본 / ollama 선택)이 `termux-api` 도구를
-호출하게 한다.
+노트북·데스크톱·Android Termux에서 실행하는 **완전 로컬 코딩·자동화 하네스**입니다.
+모델 추론, 도구 실행, 승인, 작업 저장을 모두 사용자의 기기에서 처리합니다.
+헥사고날 구조로 코어와 외부 환경을 분리하고 운영체제와 모델 엔진을 어댑터로 연결합니다.
 
-수치·부작용은 도구가 담당하고, LLM은 자연어 해석과 도구 선택에만 쓴다. 문자 발송·전화
-걸기 같은 **변경 작업은 실행 전 사람 승인**을 거친다.
+기본 엔진은 **llama.cpp**이며 로컬 **Ollama**도 지원합니다. 클라우드 추론으로 자동
+전환하지 않고 API 키도 필요하지 않습니다. 최초 설치와 모델 다운로드에는 인터넷이
+필요하지만 준비된 로컬 환경에서는 오프라인으로 실행할 수 있습니다. 사용자가 요청하고
+승인한 셸 명령이나 문자 발송 등의 도구 작업은 네트워크를 사용할 수 있습니다.
 
-답변은 토큰 단위로, 한 줄씩 스트리밍된다.
+## x64 Linux 설치
 
-## 데모
+최신 안정 버전 [Rust](https://rustup.rs)와 C/C++ 빌드 도구가 필요합니다.
+Debian/Ubuntu에서는 다음 패키지를 설치한 뒤 하네스를 빌드합니다.
 
-<!-- 폰에서 녹화해 GIF 삽입: ![demo](docs/demo.gif) -->
-
-```text
-> 최근 문자 요약하고 엄마한테 7시까지 간다고 답장해줘
-Thinking… (2s)
-새 문자 3건 — 엄마: "밥 먹었어?", 은행 OTP, 택배 6시 도착.
-엄마(010-…)에게 초안: "7시까지 갈게 — 사랑해"
-approval needed: sms_send {"number":"010-…","text":"7시까지 갈게 — 사랑해"}  [y/N] y
-발송 완료.
+```sh
+sudo apt update
+sudo apt install build-essential cmake git curl
+git clone https://github.com/yanghoeg/usix-code.git
+cd usix-code
+sh install.sh
+export PATH="$HOME/.local/bin:$PATH"
+usix-code setup
+usix-code doctor
+usix-code
 ```
 
-## 빠른 시작
+설치 위치는 `~/.local/bin`입니다. PATH 설정을 셸 설정 파일에도 추가하세요.
+`setup`은 PATH의 `llama-server`를 사용하거나 `~/.usix/backends`에 llama.cpp
+**v0.5.0**을 CPU용으로 빌드합니다. Git, CMake, Make, C++ 컴파일러가 필요하며
+기본 빌드 작업 수는 2개입니다. `CMAKE_BUILD_PARALLEL_LEVEL`로 조절할 수 있습니다.
+GPU와 시스템 서비스는 필수가 아닙니다. GPU를 쓰려면 해당 GPU용 `llama-server`를
+PATH에 두거나 로컬 서버를 먼저 실행하세요.
 
-```bash
-pkg install rust git
-git clone https://github.com/yanghoeg/usix-termux && cd usix-termux
-cargo build --release && ./target/release/usix-termux setup
+## Android Termux 설치
+
+[Termux](https://termux.dev) 안에서 직접 빌드합니다.
+
+```sh
+pkg update
+pkg install rust clang make git curl bash coreutils
+git clone https://github.com/yanghoeg/usix-code.git
+cd usix-code
+sh install.sh
+usix-code setup
+usix-code doctor
+usix-code
 ```
 
-`setup` 한 번으로 백엔드 설치·모델 다운로드·서버 기동·예시 스킬 심기까지 끝난다.
-폰 도구엔 여전히 **Termux:API 앱**(F-Droid)이 필요하다 — [전제](#전제) 참고.
+설치 위치는 `$PREFIX/bin`입니다. `setup`은 필요한 경우 `pkg`로 `llama-cpp`를
+설치합니다. Termux:API와 컴패니언 앱은 폰 도구를 쓸 때만 필요합니다.
+[Android 도구 안내](docs/termux.md)에서 권한과 연결 방법을 확인할 수 있습니다.
 
-## 특징
+두 환경에서 같은 Rust 패키지와 명령을 사용합니다.
+`sh install.sh --prefix /원하는/경로`로 설치 위치를 바꿀 수 있고,
+`cargo install --locked --path .`도 지원합니다. 각 환경에서 네이티브 빌드해야 하므로
+x64 Linux 실행 파일을 ARM Android에 그대로 복사해서 사용할 수는 없습니다.
 
-- 🧠 **로컬 LLM**, 클라우드 없음 — llama.cpp(`llama-server`, OpenAI 호환) 또는 ollama
-- 🔧 **함수 호출** — 모델이 `termux-api`로 실제 폰 도구를 호출
-- 🔒 **승인 게이트** — 읽기 도구는 자동 실행, 변경 도구는 먼저 `y/N` 확인
-- 📱 **폰 규모 TUI** — 인라인 입력 박스, `Thinking…` 타이머, 스트리밍 마크다운
-- 🧩 **헥사고날 코어** — 도메인을 건드리지 않고 LLM 백엔드 교체·도구 추가
-- **작업 저장과 예약 실행** — 여러 단계의 작업을 저장하고 백그라운드에서 실행하며,
-  승인이 필요한 지점부터 이어서 진행. [작업 안내](docs/tasks.md).
+## 모델과 실행
 
-## 구조
+`setup`은 모델이 없으면 [Qwen3.5-2B Q5_K_M](https://huggingface.co/unsloth/Qwen3.5-2B-GGUF/blob/main/Qwen3.5-2B-Q5_K_M.gguf)을
+`~/models/Qwen3.5-2B-Q5_K_M.gguf`에 다운로드합니다. 크기는 약 1.44 GB입니다.
+다운로드가 완료된 뒤 모델 파일로 옮깁니다. 더 큰 모델을 사용하려면 메모리 용량에
+맞는 로컬 GGUF를 지정하세요.
 
-```
-main.rs            DI: 백엔드 선택 + 서브커맨드
-bootstrap.rs       setup/doctor — 백엔드 설치·서버 기동·모델 준비
-ports.rs           계약: Llm / Tool / ApprovalClass
-adapters/
-  llama.rs         llama-server OpenAI /v1/chat/completions (스트리밍, 기본)
-  ollama.rs        로컬 ollama /api/chat (ureq 동기 HTTP, TLS 없음)
-  termux.rs        termux-* 명령 실행 (timeout 가드)
-domain/
-  registry.rs      도구 등록 + tools 스키마
-  agent.rs         function-calling 루프 + 승인 게이트
-  skills.rs        마크다운 스킬 로더 (~/.usix/skills/*.md → 시스템 프롬프트)
-tools/
-  read.rs          sms_list, call_log, battery, contacts   (ReadOnly, 자동)
-  comms.rs         sms_send, call, reminder                (Mutating, 승인 필요)
-  shell.rs         read_file, list_dir (ReadOnly) · shell, write_file (Mutating)
-  ui.rs            ui_dump (ReadOnly) · app_open/ui_tap/ui_tap_text/ui_type/ui_back (Mutating) — 컴패니언 AccessibilityService, 기본 등록
-  companion.rs     notif_list (ReadOnly) · notif_reply (Mutating) — 알림 브리지, 기본 등록 (kakao_read)
-tui.rs             인라인 ratatui 입력 박스 + 일반 stdout 스트리밍 대화록
-  editor.rs        UTF-8 라인 에디터 (멀티라인·히스토리·단어 편집)
-  markdown.rs      마크다운 → 스타일 라인 (heading·코드블록·리스트·inline)
-skills/
-  sms_reply.md     예시 스킬 (최근 문자 요약 + 답장 작성)
+```sh
+export USIX_MODEL="$HOME/models/my-local-model.gguf"
+usix-code setup
+cd /path/to/project
+usix-code
 ```
 
-안드로이드 컴패니언 앱은 **별도 repo**([usix-companion](https://github.com/yanghoeg/usix-companion))에 있다 — 아래 "컴패니언 앱" 참고.
+직접 지정한 GGUF는 이미 존재해야 하며 대화와 도구 호출을 지원해야 합니다.
+품질과 메모리 사용량은 선택한 모델에 따라 달라집니다.
+기본 2B 모델은 두 환경에서 시작하기 위한 작은 모델입니다.
 
-## 전제
+Ollama는 다음처럼 선택합니다. Linux에서는 [공식 설치 안내](https://docs.ollama.com/linux)에
+따라 먼저 설치해야 하며, Termux에서는 `setup`이 패키지를 설치할 수 있습니다.
 
-- **Termux** + Rust 툴체인: `pkg install rust`
-- **백엔드** (택 1):
-  - **llama.cpp** (기본): `pkg install llama-cpp llama-cpp-backend-opencl` + GGUF 모델
-    하나. 기본 모델은 Hammer2.1-3b Q4_K_M — 온디바이스 3B 중 tool-calling 판단이 가장
-    낫다. `setup`이 자동으로 받는다(`llama-model-get hammer`).
-    Adreno GPU는 반드시 `llama-gpu` 런처(네이티브 Qualcomm OpenCL, `-ngl 99`)로 서버를
-    띄운다 — Vulkan/clvk 경로는 garbage 토큰이 나온다.
-  - **ollama**: ollama 설치 후 `USIX_BACKEND=ollama`.
-- **termux-api** (폰 도구용):
-  - `pkg install termux-api` (CLI 패키지), **그리고**
-  - 별도의 **Termux:API 앱**을 [F-Droid](https://f-droid.org/packages/com.termux.api/)에서
-    설치해 한 번 실행하고 SMS/전화/배터리 권한을 부여.
-  - 앱이 없으면 CLI가 깔려 있어도 `termux-*` 도구가 응답하지 않는다 —
-    `usix-termux doctor`가 둘 다 점검한다.
-
-> 루팅 안 된 안드로이드에서는 배터리·SMS에 대한 `sysfs`/`dumpsys` 우회가 없다.
-> Termux:API 앱이 유일한 경로다.
-
-## 설치
-
-```bash
-git clone <repo-url> usix-termux
-cd usix-termux
-cargo build --release
-./target/release/usix-termux setup    # 백엔드 설치 + 서버 기동 (llama.cpp, GPU)
-./target/release/usix-termux doctor   # 전제조건 점검
+```sh
+export USIX_BACKEND=ollama
+export USIX_MODEL=qwen2.5:1.5b-instruct-q5_K_M
+usix-code setup
+usix-code
 ```
 
-`setup`은 백엔드를 설치하고 서버를 백그라운드로 띄우며(런처 종료에도 생존), 모델까지
-받는다(llama.cpp면 Hammer2.1-3b Q4, ollama면 해당 태그). `doctor`는 백엔드별
-체크리스트를 출력한다.
+하네스가 시작하는 Ollama에는 `OLLAMA_NO_CLOUD=1`을 설정합니다. 직접 관리하는
+서버에서도 클라우드 기능을 끄고 다운로드한 로컬 모델을 사용하세요.
+추론 연결은 llama.cpp의 `127.0.0.1:8080` 또는 Ollama의 `127.0.0.1:11434`를 사용하며
+HTTP 리다이렉트는 따르지 않습니다. 로그는 `~/.usix/logs`에 저장합니다.
+`setup`이 준비한 서버는 계속 실행됩니다. 대화나 워커가 직접 시작한 서버는 종료할 때
+정리하며 기존 서버는 유지합니다. 자동 시작 서비스는 설치하지 않습니다.
 
-## 사용법
+## 공통 도구와 승인
 
-```bash
-usix-termux            # 대화형 TUI
-usix-termux setup      # 백엔드 설치 + 모델 다운로드 + 서버 기동
-usix-termux doctor     # 전제조건 점검
-usix-termux -c "..."   # 한 번 질문 (비대화형; 변경 도구는 자동 거부)
-usix-termux task --help # 작업 저장, 예약, 반복 실행, 중단 후 재개
-usix-termux worker     # 실행 시각이 된 작업 처리; 변경 작업은 승인 대기
+| 도구 | 승인 |
+| --- | --- |
+| `read_file`, `list_dir`, `task_list` | 자동 실행 |
+| `shell`, `write_file`, `task_create`, `task_cancel` | 사람 승인 필요 |
+
+```sh
+usix-code -c "README.md를 읽고 프로젝트를 요약해줘"
+usix-code task --help
+usix-code worker --once
 ```
 
-### 환경변수
+`-c` 모드에서는 변경 작업을 거부합니다. 백그라운드 작업은 승인이 필요하면 멈추며
+`usix-code task run ID`로 확인하고 이어서 진행할 수 있습니다.
+도구는 현재 OS 계정 권한으로 실행됩니다. 승인 절차가 파일 접근을 격리하는 샌드박스는
+아닙니다. [작업·예약·복구 안내](docs/tasks.md).
 
-| 변수           | 기본값                                             | 의미                                     |
-| -------------- | -------------------------------------------------- | ---------------------------------------- |
-| `USIX_BACKEND` | `llama`                                            | `llama` (llama.cpp) 또는 `ollama`        |
-| `USIX_MODEL`   | `~/models/Qwen3.5-2B-Q5_K_M.gguf` (llama)          | GGUF 경로(llama) 또는 모델 태그(ollama)  |
-|                | `qwen2.5:1.5b-instruct-q5_K_M` (ollama)            |                                          |
+스킬은 `~/.usix/skills`의 Markdown 파일입니다. 로컬 코딩 스킬은 두 환경에 제공하고
+문자·메일·카카오톡 스킬은 Termux 어댑터가 추가합니다. 사용자가 수정한 스킬은 보존합니다.
+일반 대화 기록은 세션 안에서 유지되고 저장한 작업은 종료 후에도 남습니다.
 
-```bash
-# 더 작고 빠른 GGUF
-USIX_MODEL=~/models/qwen2.5-1.5b-instruct-q5_k_m.gguf usix-termux
-# ollama 백엔드
-USIX_BACKEND=ollama USIX_MODEL=qwen2.5:1.5b-instruct-q5_K_M usix-termux
+## 헥사고날 구조
+
+코어는 운영체제를 판별하거나 패키지 명령을 실행하지 않습니다.
+
+- `domain/`: 에이전트, 승인 흐름, 도구 레지스트리, 스킬 해석·선택
+- `ports.rs`: 모델의 `Llm`, 작업의 `Tool`, 실행 환경의 `Host` 계약
+- `adapters/host/`: Linux·Termux별 설치, 도구, 기본 스킬, 진단, 알림
+- `adapters/skills.rs`, `adapters/runtime.rs`: 파일과 프로세스 입출력
+- `bootstrap.rs`: 선택한 호스트를 이용한 설치 준비와 서버 수명 관리
+- `main.rs`: 환경에 맞는 어댑터를 선택하고 주입하는 진입점
+
+다른 환경은 `Host` 구현과 필요한 입출력 어댑터를 추가해 연결합니다.
+에이전트와 작업 실행기의 변경 없이 확장하는 구조이며 현재 지원 대상은 Linux와
+Android Termux입니다. 다른 운영체제의 실행까지 검증했다는 뜻은 아닙니다.
+
+## 이름 변경과 검증
+
+기존 `usix-termux` 패키지·실행 파일 이름은 `usix-code`로 바뀝니다.
+`~/.usix`의 스킬, 작업, 컴패니언 토큰 경로는 유지합니다. 셸 별칭과 워커 실행 명령을
+바꾸세요. 새 설치가 예전 실행 파일을 자동으로 삭제하지는 않습니다.
+
+```sh
+cargo fmt --check
+cargo test --locked
+cargo clippy --locked --all-targets -- -D warnings
+python3 tests/install_smoke.py
 ```
 
-### TUI 단축키
-
-| 키                  | 동작                          |
-| ------------------- | ----------------------------- |
-| `Enter`             | 제출                          |
-| `Ctrl+J`            | 개행 (멀티라인 입력)          |
-| `↑` / `↓`           | 히스토리                      |
-| `! <명령>`          | 로컬 셸 명령 실행             |
-| `exit` / `quit`     | 세션 종료                     |
-| `Esc` / `Ctrl+D`    | 세션 종료 (빈 입력일 때)      |
-| `Ctrl+A` / `Ctrl+E` | 줄 처음 / 끝                  |
-| `Ctrl+W` / `Ctrl+U` | 단어 삭제 / 줄 처음까지 삭제  |
-| `Alt+←` / `Alt+→`   | 단어 단위 이동                |
-
-### 예시
-
-```
-> 배터리 얼마나 남았어?
-Thinking… (2s)
-현재 62%, 충전 중입니다.
-
-> 010-1234-5678로 "10분 늦어" 문자 보내줘
-approval needed: sms_send {"number":"010-1234-5678","text":"10분 늦어"}  [y/N] y
-010-1234-5678로 발송 완료.
-```
-
-## 도구
-
-| 도구       | 등급     | 승인      |
-| ---------- | -------- | --------- |
-| `sms_list` | ReadOnly | 자동      |
-| `call_log` | ReadOnly | 자동      |
-| `battery`  | ReadOnly | 자동      |
-| `contacts`   | ReadOnly | 자동      |
-| `read_file`  | ReadOnly | 자동      |
-| `list_dir`   | ReadOnly | 자동      |
-| `sms_send`   | Mutating | `y/N`     |
-| `call`       | Mutating | `y/N`     |
-| `reminder`   | Mutating | `y/N`     |
-| `shell`      | Mutating | `y/N`     |
-| `write_file` | Mutating | `y/N`     |
-
-실험적 폰 UI 도구 — `USIX_UI` 설정 시에만 등록(아래 참고):
-
-| 도구        | 등급     | 승인      |
-| ----------- | -------- | --------- |
-| `ui_dump`   | ReadOnly | 자동      |
-| `app_open`  | Mutating | `y/N`     |
-| `ui_tap`    | Mutating | `y/N`     |
-| `ui_type`   | Mutating | `y/N`     |
-| `ui_back`   | Mutating | `y/N`     |
-
-컴패니언 알림 도구 — 기본 등록(아래 참고):
-
-| 도구          | 등급     | 승인      |
-| ------------- | -------- | --------- |
-| `notif_list`  | ReadOnly | 자동      |
-| `notif_reply` | Mutating | `y/N`     |
-
-## 폰 UI 컨트롤 (실험적)
-
-`termux-api` 를 넘어, 별도 **[usix-companion](https://github.com/yanghoeg/usix-companion)**
-앱의 Android `AccessibilityService`로 현재 보이는 폰 UI를 읽고 조작할 수 있다. 루트나 adb가
-필요 없고, 카톡·라인 등 **임의 앱의 보이는 흐름을** 조종한다.
-
-셋업(1회):
-
-```bash
-# 컴패니언을 설치·실행하고 Android 설정에서 접근성 서비스를 켠다.
-# 컴패니언 앱에서 "토큰 복사"를 누른 뒤 Termux에서:
-usix-termux pair                    # 클립보드에서 읽음(없으면 붙여넣기 프롬프트)
-USIX_UI=1 usix-termux doctor         # 브리지·토큰·접근성 ✅
-USIX_UI=1 usix-termux                # UI 도구 등록됨
-```
-
-`USIX_UI` 를 켜면 다섯 도구가 추가된다: `ui_dump`(ReadOnly — 보이는 텍스트·요소 좌표를
-읽음)와 `app_open`, `ui_tap`, `ui_type`, `ui_back`(Mutating — 앱 열기·보이는 요소 탭·텍스트
-입력·뒤로 가기). 번들 스킬 `kakao_read`가 이 도구들로 카톡을 열어 보이는 대화를 요약하며,
-사용자가 요청한 경우에만 탭·입력을 수행할 수 있다.
-
-정직한 한계:
-
-- **보이는 것만.** 접근성 서비스는 현재 UI 계층과 보이는 텍스트를 노출하지만, 다른 앱의
-  **비공개 DB나 전체 대화 기록은 읽지 못한다.**
-- **명시적 승인.** 앱 열기·탭·입력·뒤로 가기는 변경 작업이므로 `y/N` 승인이 필요하다.
-  입력은 현재 포커스된 보이는 필드로 전송된다.
-- **취약함.** UI 레이아웃·좌표는 기기마다 다르고, 소형 로컬 모델은 짧은 정해진 흐름만
-  안정적으로 처리한다.
-
-## 컴패니언 앱 — 알림 & 답장 (실험적)
-
-UI 브리지는 *화면*을 읽지만 다른 앱의 알림을 읽거나 인라인 답장을 쏘진 못한다.
-별도 [usix-companion](https://github.com/yanghoeg/usix-companion) 앱(작은 Kotlin `NotificationListenerService`)이 그 둘을 **루트·adb 없이** 해낸다: 들어오는
-알림(카톡·라인 등)을 잡고, 앱이 제공하는 인라인 **RemoteInput** 답장을 보낸다. 루프백 전용
-HTTP 브리지를 `127.0.0.1:8760`에 열고, Termux 에이전트가 두 도구로 이를 부린다:
-
-- `notif_list` (ReadOnly) — 최근 알림(`pkg`·`title`·`text`·`key`·`canReply`)
-- `notif_reply` (Mutating, `y/N`) — 알림 `key`에 인라인 답장
-
-화면읽기와 달리 이건 **실제로 답장이 되고**, 들어온 메시지를 **백그라운드로(앱 전환 없이)**
-읽는다 — 카톡을 포그라운드로 올리지 않는다. 이 도구들은 기본 등록된다. 번들 스킬 `kakao_read`가
-안 읽은 카톡 알림을 요약하고, 원하면 인라인 답장을 보낸다 — "카톡 요약 / 카톡 뭐 왔어"의 기본 경로다.
-화면읽기와 달리 이건 **실제로 답장이 되고**, 들어온 메시지를 **백그라운드로(앱 전환 없이)**
-읽는다 — 카톡을 포그라운드로 올리지 않는다. 이 도구들은 기본 등록된다. 번들 스킬 `kakao_read`가
-안 읽은 카톡 알림을 요약하고, 원하면 인라인 답장을 보낸다 — "카톡 요약 / 카톡 뭐 왔어"의 기본 경로다.
-
-셋업:
-
-```bash
-# 1. 컴패니언 APK 받기 (별도 repo):
-#    - 권장: 최신 app-debug.apk 를 Releases 에서 다운로드
-#      https://github.com/yanghoeg/usix-companion/releases
-#    - 또는 직접 빌드 (로컬 Gradle 8.10.2 + Android SDK 필요):
-#        git clone https://github.com/yanghoeg/usix-companion && cd usix-companion
-#        gradle assembleDebug            # 또는 Android Studio 로 열기
-# 2. 설치 후 한 번 실행하고 "알림 접근" 권한을 부여한다. 폰 UI를 쓸 때는
-#    "접근성 접근" 권한도 부여한다(앱에 두 버튼이 있음)
-# 3. 1회 페어링: 앱에서 "토큰 복사" 를 누른 뒤 Termux 에서:
-usix-termux pair            # 클립보드에서 읽음(없으면 붙여넣기 프롬프트)
-# 4. Termux 로 돌아와서:
-usix-termux doctor          # 브리지 127.0.0.1:8760 ✅ · 토큰 페어링 ✅
-usix-termux                 # notif_list / notif_reply 기본 등록됨
-```
-
-정직한 한계:
-
-- **알림만.** 알림에 실린 것(보낸 사람 + 최신 한 줄)만 보고, 앱이 RemoteInput 답장 액션을
-  붙인 경우(`canReply`)에만 답장할 수 있다. 전체 대화 기록은 여전히 루트 필요.
-- **같은 기기 루프백 + 토큰.** 브리지는 `127.0.0.1`에만 바인딩하고, 도구가 응답하려면 APK가
-  실행 중이어야 한다(리스너 서비스가 살려 둔다). 안드로이드는 모든 앱이 루프백을 공유하므로
-  바인딩만으론 호출자를 못 가린다 — 앱이 첫 실행 때 만든 토큰을 매 요청 Bearer 로 보낸다
-  (Termux 쪽은 `usix-termux pair` 가 `~/.usix/companion_token` 에 저장). 토큰 없으면 `401`,
-  `/health` 만 열려 있다.
-- **Gradle 래퍼 미커밋.** usix-companion repo는 래퍼 jar를 넣지 않았다 — CI는 고정된 Gradle
-  버전으로 빌드하고, 로컬 빌드는 시스템 `gradle` 또는 Android Studio 를 쓴다.
-
-## 스킬
-
-스킬은 `~/.usix/skills/*.md`에 두는 **마크다운 절차**로, 모델에게 기존 도구를 엮는 법을
-알려준다 — **재빌드가 필요 없다.** 각 파일은 작은 frontmatter(`name`, `description`)와
-단계별 본문으로 되어 있다. 매 요청마다 그 요청과 **관련된 스킬만**(name·description·본문
-키워드 매칭) 시스템 프롬프트에 덧붙으며, 최대 8개다 — 소형 로컬 모델의 컨텍스트를 당면
-작업에 집중시키기 위함이다.
-
-`setup`이 예시 하나 **`sms_reply`** — "최근 문자 요약하고 답장 도와줘" — 를 심는다.
-`sms_list`로 읽어 요약하고, 원하면 문자 초안을 잡아 `sms_send`로 보낸다. `sms_send`는
-발송 전 여전히 `y/N` 승인을 거친다. 폴더에 `.md`를 하나 더 떨구면 스킬이 늘어난다.
-
-```
-> 최근 문자 요약하고 엄마한테 7시까지 간다고 답장해줘
-(sms_list 조회·요약) … 010-…에게 초안: "7시까지 갈게, 사랑해"
-approval needed: sms_send {"number":"010-…","text":"7시까지 갈게, 사랑해"}  [y/N] y
-발송 완료.
-```
-
-## 상태
-
-v0 — 백엔드 2종(llama.cpp 기본 / ollama), 읽기 도구 6종 + 변경 도구 5종(승인 게이트),
-그리고 `USIX_UI` 뒤의 실험적 컴패니언 폰 UI 도구, 스트리밍 마크다운 TUI. 라이선스 MIT.
+CI는 Linux 테스트와 Android ARM64 컴파일 검사를 수행합니다.
+Termux 기기에서의 모델 실행과 폰 도구 검증은 별도로 필요합니다. MIT 라이선스입니다.

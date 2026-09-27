@@ -1,6 +1,7 @@
 use super::store::{now, Status, Store, Task};
 use crate::domain::agent::{Agent, Turn};
 use crate::domain::registry::Registry;
+use crate::domain::skills::Skill;
 use crate::ports::Llm;
 use anyhow::{ensure, Result};
 
@@ -12,6 +13,7 @@ pub fn run(
     id: u64,
     llm: &dyn Llm,
     registry: &Registry,
+    skills: Vec<Skill>,
     mut approval: Approval<'_>,
     prepare: &mut dyn FnMut() -> Result<()>,
 ) -> Result<Task> {
@@ -25,12 +27,11 @@ pub fn run(
         task.status
     );
     ensure!(!task.action_in_flight,
-        "an approved action may have executed; inspect the phone, then use `task retry {id}` if starting over is appropriate");
-    crate::tools::ui::clear_cache();
+        "an approved action may have executed; inspect the affected state, then use `task retry {id}` if starting over is appropriate");
     let mut agent = match task.checkpoint.clone() {
-        Some(state) => Agent::restore(llm, registry, state)?,
+        Some(state) => Agent::restore(llm, registry, state, skills)?,
         None => {
-            let mut agent = Agent::new(llm, registry);
+            let mut agent = Agent::new(llm, registry, skills);
             agent.submit(&task.prompt);
             agent
         }
@@ -70,7 +71,7 @@ pub fn run(
                         return Ok(());
                     }
                     // Save before executing. A crash after this point requires inspection,
-                    // because the phone action and the local checkpoint cannot be atomic.
+                    // because the external action and the local checkpoint cannot be atomic.
                     task.status = Status::Running;
                     task.action_in_flight = true;
                     store.save(&mut task)?;
@@ -208,7 +209,16 @@ mod tests {
         let task = store.create("read then send", 0, None, 100).unwrap();
         let llm = Scripted::new(vec![call(&["read_phone"]), call(&["send"]), answer()]);
         let (registry, reads, writes) = registry(false);
-        let paused = run(store, task.id, &llm, &registry, None, &mut || Ok(())).unwrap();
+        let paused = run(
+            store,
+            task.id,
+            &llm,
+            &registry,
+            Vec::new(),
+            None,
+            &mut || Ok(()),
+        )
+        .unwrap();
         assert_eq!(paused.status, Status::AwaitingApproval);
         assert_eq!(reads.load(Ordering::SeqCst), 1);
         assert_eq!(writes.load(Ordering::SeqCst), 0);
@@ -220,6 +230,7 @@ mod tests {
             task.id,
             &llm,
             &registry,
+            Vec::new(),
             Some(&mut |desc| {
                 approvals.push(desc.to_owned());
                 Ok(true)
@@ -253,6 +264,7 @@ mod tests {
             task.id,
             &llm,
             &registry,
+            Vec::new(),
             Some(&mut |_| Ok(false)),
             &mut || Ok(()),
         )
@@ -278,6 +290,7 @@ mod tests {
             task.id,
             &llm,
             &registry,
+            Vec::new(),
             Some(&mut |_| {
                 approvals += 1;
                 Ok(true)
@@ -288,9 +301,15 @@ mod tests {
         assert_eq!(approvals, 2);
         assert_eq!(completed.status, Status::Scheduled);
         assert!(completed.next_run_at.unwrap() >= completed.last_finished_at.unwrap() + 60);
-        let paused = run(&fixture.store, task.id, &llm, &registry, None, &mut || {
-            Ok(())
-        })
+        let paused = run(
+            &fixture.store,
+            task.id,
+            &llm,
+            &registry,
+            Vec::new(),
+            None,
+            &mut || Ok(()),
+        )
         .unwrap();
         assert_eq!(paused.status, Status::AwaitingApproval);
         assert_eq!(writes.load(Ordering::SeqCst), 2);
@@ -309,6 +328,7 @@ mod tests {
                 task.id,
                 &llm,
                 &registry,
+                Vec::new(),
                 Some(&mut |_| Ok(true)),
                 &mut || Ok(()),
             )
@@ -326,6 +346,7 @@ mod tests {
             task.id,
             &llm,
             &registry,
+            Vec::new(),
             Some(&mut |_| Ok(true)),
             &mut || Ok(())
         )
@@ -340,18 +361,23 @@ mod tests {
         let task = fixture.store.create("read", 0, None, 100).unwrap();
         let llm = Scripted::new(vec![call(&["read_phone"])]);
         let (registry, reads, _) = registry(false);
-        assert!(
-            run(&fixture.store, task.id, &llm, &registry, None, &mut || Ok(
-                ()
-            ))
-            .is_err()
-        );
+        assert!(run(
+            &fixture.store,
+            task.id,
+            &llm,
+            &registry,
+            Vec::new(),
+            None,
+            &mut || Ok(())
+        )
+        .is_err());
         assert_eq!(fixture.store.get(task.id).unwrap().status, Status::Failed);
         let resumed = run(
             &fixture.store,
             task.id,
             &Scripted::new(vec![answer()]),
             &registry,
+            Vec::new(),
             None,
             &mut || Ok(()),
         )
@@ -372,6 +398,7 @@ mod tests {
             task.id,
             &llm,
             &registry,
+            Vec::new(),
             Some(&mut |_| {
                 fixture.store.cancel(task.id)?;
                 Ok(true)
@@ -398,6 +425,7 @@ mod tests {
             task.id,
             &llm,
             &registry,
+            Vec::new(),
             None,
             &mut || bail!("backend unavailable")
         )
@@ -405,12 +433,16 @@ mod tests {
         assert_eq!(fixture.store.get(task.id).unwrap().status, Status::Failed);
         assert_eq!(llm.requests.lock().unwrap().len(), 0);
         let llm = Scripted::new((0..20).map(|_| call(&["read_phone"])).collect());
-        assert!(
-            run(&fixture.store, task.id, &llm, &registry, None, &mut || Ok(
-                ()
-            ))
-            .is_err()
-        );
+        assert!(run(
+            &fixture.store,
+            task.id,
+            &llm,
+            &registry,
+            Vec::new(),
+            None,
+            &mut || Ok(())
+        )
+        .is_err());
         let saved = fixture.store.get(task.id).unwrap();
         assert_eq!(saved.status, Status::Failed);
         assert!(saved.error.unwrap().contains("step limit"));
@@ -436,14 +468,21 @@ mod tests {
                 task.id,
                 &Scripted::new(replies),
                 &registry,
+                Vec::new(),
                 None,
                 &mut || Ok(())
             )
             .is_err());
             let llm = Scripted::new(vec![answer()]);
-            let resumed = run(&fixture.store, task.id, &llm, &registry, None, &mut || {
-                Ok(())
-            })
+            let resumed = run(
+                &fixture.store,
+                task.id,
+                &llm,
+                &registry,
+                Vec::new(),
+                None,
+                &mut || Ok(()),
+            )
             .unwrap();
             assert_eq!(resumed.status, Status::Completed);
             let requests = llm.requests.lock().unwrap();
@@ -490,6 +529,7 @@ mod tests {
             task.id,
             &first,
             &registry,
+            Vec::new(),
             None,
             &mut || Ok(()),
         )
@@ -502,6 +542,7 @@ mod tests {
             task.id,
             &resumed,
             &registry,
+            Vec::new(),
             Some(&mut |_| {
                 assert_eq!(reads.load(Ordering::SeqCst), 1);
                 approvals += 1;

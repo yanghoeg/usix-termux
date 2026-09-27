@@ -1,6 +1,61 @@
-// PORTS — I/O 없는 도메인 계약. usix의 도구/권한 경계를 폰 규모로 축약.
+// PORTS — contracts implemented by external adapters.
 use anyhow::Result;
 use serde_json::Value;
+use std::path::PathBuf;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Backend {
+    Llama,
+    Ollama,
+}
+
+impl Backend {
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Llama => "llama",
+            Self::Ollama => "ollama",
+        }
+    }
+}
+
+pub struct LaunchSpec {
+    pub program: PathBuf,
+    pub args: Vec<String>,
+    pub env: Vec<(String, String)>,
+}
+
+impl LaunchSpec {
+    pub fn new(program: impl Into<PathBuf>) -> Self {
+        Self {
+            program: program.into(),
+            args: Vec::new(),
+            env: Vec::new(),
+        }
+    }
+}
+
+pub struct BundledSkill {
+    pub filename: &'static str,
+    pub text: &'static str,
+    pub legacy: Option<&'static str>,
+}
+
+/// Host services are injected at the application boundary. The agent never detects an OS.
+pub trait Host: Send + Sync {
+    fn name(&self) -> &'static str;
+    fn tools(&self) -> Vec<Box<dyn Tool>>;
+    fn bundled_skills(&self) -> &'static [BundledSkill];
+    fn ensure_backend(&self, backend: Backend) -> Result<()>;
+    fn backend_launch(&self, backend: Backend) -> LaunchSpec;
+    fn doctor(&self) -> Result<()>;
+    fn pair(&self, _token: Option<&str>) -> Result<()> {
+        anyhow::bail!("companion pairing is unavailable on {}", self.name())
+    }
+    fn notify(&self, content: &str) {
+        eprintln!("{content}");
+    }
+    fn reset_tools(&self) {}
+}
 
 /// LLM 게이트웨이 계약 (ollama 등 구현체가 채움).
 /// Send + Sync: TUI가 모델 호출(블로킹)을 워커 스레드로 돌려 경과 시간을 표시한다.

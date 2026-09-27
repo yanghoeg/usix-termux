@@ -1,42 +1,42 @@
-# Persistent phone tasks
+# Persistent local tasks
 
-USIX can keep multi-step phone work outside an interactive chat session. The Termux
-agent owns tasks, model calls, approval decisions, and schedules. The Android
-companion supplies its existing screen, mail, and notification tools; this feature
-does not require a new companion API or OpenClaw.
+usix-code keeps multi-step local work outside an interactive chat session. The
+harness owns model calls, approvals, checkpoints, and schedules on the same device.
+Host adapters provide available tools and notifications. Linux uses local file,
+shell, and task tools; Termux can also use Android tools.
 
 ## Start a task
 
 ```sh
-usix-termux task add "Check my battery and summarize recent notifications"
-usix-termux worker --once
-usix-termux task list
-usix-termux task show 1
+usix-code task add "Read README.md and summarize the project"
+usix-code worker --once
+usix-code task list
+usix-code task show 1
 ```
 
 Use the ID returned by `task add` in later commands. `worker --once` processes a
 snapshot of tasks currently due. It uses the configured local model and saves the
-result of every tool step. It does not approve phone-changing actions.
+result of every tool step. It does not approve changing actions.
 
 For a task that requires approval, inspect and resume it:
 
 ```sh
-usix-termux task run 1
+usix-code task run 1
 ```
 
 The command shows the exact tool and arguments before each changing action.
 Approval requires an interactive terminal. A non-interactive invocation leaves the
 task waiting. Declining an action cancels that task, its remaining calls, and its
-repeat schedule. Read the tool results and check the phone for actions such as
+repeat schedule. Read the tool results and check the affected application for actions such as
 sending mail; a model's final text is not independent proof of delivery.
 
 ## Schedule work
 
 ```sh
-usix-termux task schedule --after 10m "Summarize my recent notifications"
-usix-termux task schedule --every 1h "Check battery level and charging status"
-usix-termux task schedule --after 5m --every 1d "Summarize recent notifications"
-usix-termux worker
+usix-code task schedule --after 10m "Read README.md and summarize the project"
+usix-code task schedule --every 1h "List files in the current project directory"
+usix-code task schedule --after 5m --every 1d "Summarize the project documentation"
+usix-code worker
 ```
 
 Durations accept seconds, minutes, hours, or days (`30s`, `10m`, `1h`, `1d`), up to
@@ -47,17 +47,17 @@ run when the worker returns; they do not produce a burst of repeated work. These
 are duration-based schedules, not calendar or cron expressions.
 
 The worker checks every five seconds while idle and must remain running. A simple
-Termux launch that survives closing the launching shell is:
+Linux or Termux launch that survives closing the launching shell is:
 
 ```sh
 mkdir -p ~/.usix/tasks
 chmod 700 ~/.usix/tasks
-nohup usix-termux worker > ~/.usix/tasks/worker.log 2>&1 < /dev/null &
+nohup usix-code worker > ~/.usix/tasks/worker.log 2>&1 < /dev/null &
 ```
 
-Android can still stop Termux or defer work while the phone sleeps. Restart the
+Suspending the machine delays work. Android can also stop Termux in the background. Restart the
 worker to recover saved schedules; no boot service or exact-time alarm is installed.
-The worker emits a best-effort local Termux:API notification when a task finishes,
+On Linux the worker writes status to stderr. On Termux it also attempts a Termux:API notification when a task finishes,
 fails, or needs approval. Saved task results remain available if notification
 delivery is unavailable.
 
@@ -65,7 +65,7 @@ delivery is unavailable.
 
 Interactive chat includes `task_create`, `task_list`, and `task_cancel`. For example:
 
-> In ten minutes, summarize my recent notifications.
+> In ten minutes, read README.md and summarize the project.
 
 The model can propose a `task_create` call containing the complete prompt and
 `delay_seconds: 600`. Scheduling and cancelling require the existing human approval
@@ -73,18 +73,18 @@ gate. Queuing a task does not start a worker. A schedule does not grant future
 permission to send messages, tap the screen, run shell commands, or change files.
 Each such action pauses for a new approval, including on repeated runs.
 
-An interactive chat session owns the phone execution lock until it exits. A worker
-waits while that session is open; `worker --once` reports that the phone is busy.
-This also prevents two task runners from interleaving phone actions. Only one worker
+An interactive chat session owns the harness execution lock until it exits. A worker
+waits while that session is open; `worker --once` reports that the harness is busy.
+This also prevents two task runners from interleaving changing actions. Only one worker
 may run against a task store.
 
 ## Inspect, cancel, and recover
 
 ```sh
-usix-termux task show 1
-usix-termux task cancel 1
-usix-termux task retry 1
-usix-termux task remove 1
+usix-code task show 1
+usix-code task cancel 1
+usix-code task retry 1
+usix-code task remove 1
 ```
 
 `task run` starts queued work immediately or resumes saved work, including after a
@@ -101,8 +101,8 @@ proposes replacement actions. Their approvals are requested again. Screen caches
 are cleared between tasks.
 
 If execution stops during an approved action, the next runner marks the task
-`interrupted` and refuses to replay the action: a phone operation and its checkpoint
-cannot be committed atomically. Inspect the actual phone state before deciding
+`interrupted` and refuses to replay the action: an external operation and its checkpoint
+cannot be committed atomically. Inspect the actual affected state before deciding
 whether to retry from the beginning. Approvals are never remembered as blanket
 permission for a later run. Failed or interrupted tasks pause until explicitly
 resumed or retried; the worker does not repeatedly retry them.

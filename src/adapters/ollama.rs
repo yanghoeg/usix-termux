@@ -30,7 +30,7 @@ impl Llm for Ollama {
         let resp: Value = super::http_agent()
             .post(&self.url)
             .send_json(body)
-            .map_err(|e| anyhow!("ollama 요청 실패 (서버 실행 중? ollama-serve start): {e}"))?
+            .map_err(|e| anyhow!("ollama 요청 실패 (USIX_BACKEND=ollama usix-code setup): {e}"))?
             .into_json()
             .map_err(|e| anyhow!("ollama 응답 파싱 실패: {e}"))?;
         resp.get("message")

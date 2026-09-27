@@ -35,7 +35,7 @@ impl Llm for LlamaCpp {
         let resp: Value = super::http_agent()
             .post(&self.url)
             .send_json(body)
-            .map_err(|e| anyhow!("llama-server 요청 실패 (서버 실행 중? usix-termux setup): {e}"))?
+            .map_err(|e| anyhow!("llama-server 요청 실패 (서버 실행 중? usix-code setup): {e}"))?
             .into_json()
             .map_err(|e| anyhow!("llama-server 응답 파싱 실패: {e}"))?;
         // OpenAI 스키마: choices[0].message (tool_calls 는 function.arguments 가 JSON 문자열).
@@ -69,9 +69,7 @@ impl Llm for LlamaCpp {
         let resp = super::http_agent()
             .post(&self.url)
             .send_json(body)
-            .map_err(|e| {
-                anyhow!("llama-server 요청 실패 (서버 실행 중? usix-termux setup): {e}")
-            })?;
+            .map_err(|e| anyhow!("llama-server 요청 실패 (서버 실행 중? usix-code setup): {e}"))?;
         let reader = std::io::BufReader::new(resp.into_reader());
 
         let mut content = String::new();

@@ -1,5 +1,8 @@
+pub mod host;
 pub mod llama;
 pub mod ollama;
+pub mod runtime;
+pub mod skills;
 pub mod termux;
 
 /// llama-server 포트 (llama.cpp 기본값).
@@ -11,6 +14,7 @@ pub const LLAMA_PORT: u16 = 8080;
 pub fn http_agent() -> ureq::Agent {
     use std::time::Duration;
     ureq::AgentBuilder::new()
+        .redirects(0)
         .timeout_connect(Duration::from_secs(5))
         .timeout_read(Duration::from_secs(600))
         .timeout_write(Duration::from_secs(30))

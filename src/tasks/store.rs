@@ -158,7 +158,7 @@ impl Store {
 
     pub fn execution_lock(&self) -> Result<FileLock> {
         self.lock("execution.lock", false)
-            .context("another task or interactive session is using the phone")
+            .context("another task or interactive session is using the local harness")
     }
 
     pub fn worker_lock(&self) -> Result<FileLock> {
@@ -311,7 +311,7 @@ impl Store {
                 if task.status == Status::Running {
                     task.status = Status::Interrupted;
                     task.error = Some(if task.action_in_flight {
-                        "An approved action may have executed. Inspect the phone before retrying; it will not be replayed automatically."
+                        "An approved action may have executed. Inspect the affected state before retrying; it will not be replayed automatically."
                     } else {
                         "Execution was interrupted. Run this task to resume its saved checkpoint."
                     }.into());
@@ -499,7 +499,7 @@ pub(crate) mod tests {
         let fixture = Fixture::new();
         let execution = fixture.store.execution_lock().unwrap();
         assert!(fixture.store.execution_lock().is_err());
-        // Store updates do not block on the phone execution lock.
+        // Store updates do not block on the harness execution lock.
         fixture.store.create("check", 0, None, 100).unwrap();
         drop(execution);
         assert!(fixture.store.execution_lock().is_ok());

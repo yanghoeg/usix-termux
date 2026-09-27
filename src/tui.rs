@@ -709,12 +709,12 @@ fn mascot_line(row: &[Span<'static>]) -> Line<'static> {
 
 /// 로고 + 한 줄 컨텍스트를 copy_width 안에 맞춰 반환.
 fn copy_lines(cwd: &str, branch: &str, model: &str, width: usize) -> Vec<Line<'static>> {
-    const LOGO: &str = "✻ usix-termux v0.0.1";
+    const LOGO: &str = "✻ usix-code v0.0.1";
     let logo = if UnicodeWidthStr::width(LOGO) <= width {
         Line::from(vec![
             Span::styled("✻ ", Style::default().fg(ACCENT)),
             Span::styled(
-                "usix-termux",
+                "usix-code",
                 Style::default()
                     .fg(Color::White)
                     .add_modifier(Modifier::BOLD),

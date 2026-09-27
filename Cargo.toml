@@ -1,8 +1,9 @@
 [package]
-name = "usix-termux"
+name = "usix-code"
 version = "0.0.1"
 edition = "2021"
-description = "Termux 폰 에이전트 — 로컬 ollama function-calling + termux-api 도구"
+description = "A fully local coding and automation harness for Linux and Termux"
+repository = "https://github.com/yanghoeg/usix-code"
 license = "MIT"
 
 [dependencies]
@@ -10,7 +11,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 anyhow = "1"
 libc = "0.2"
-# localhost ollama만 호출하므로 TLS 비활성 → 폰 빌드 경량화
+# Inference uses loopback HTTP; downloads are handled separately during setup.
 ureq = { version = "2", default-features = false, features = ["json"] }
 # TUI — usix와 동일 스택
 crossterm = "0.28"

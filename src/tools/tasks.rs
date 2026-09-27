@@ -9,7 +9,7 @@ impl Tool for TaskCreate {
         "task_create"
     }
     fn description(&self) -> &str {
-        "Queue a multi-step phone task for later. delay_seconds is the first delay (0 means now); optional interval_seconds repeats after each completion. A running `usix-termux worker` is required. Phone-changing actions pause for separate human approval. Use for scheduled work, not simple reminder notifications."
+        "Queue a multi-step local task for later. delay_seconds is the first delay (0 means now); optional interval_seconds repeats after each completion. A running `usix-code worker` is required. Changing actions pause for separate human approval. Use for scheduled work, not simple reminder notifications."
     }
     fn parameters(&self) -> Value {
         json!({"type": "object", "properties": {
@@ -36,7 +36,7 @@ impl Tool for TaskCreate {
         };
         let task = Store::default_location()?.create(prompt, delay, interval, now())?;
         Ok(json!({"task": task.summary(), "worker_required": true,
-            "message": "Task queued; it executes only while `usix-termux worker` is running. Changing phone actions require separate approval."}).to_string())
+            "message": "Task queued; it executes only while `usix-code worker` is running. Changing actions require separate approval."}).to_string())
     }
 }
 

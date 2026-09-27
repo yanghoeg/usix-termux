@@ -3,32 +3,32 @@ pub mod store;
 
 use crate::bootstrap::BackendServeGuard;
 use crate::domain::registry::Registry;
+use crate::ports::Host;
 use anyhow::{bail, ensure, Context, Result};
 use serde_json::json;
 use std::io::{self, IsTerminal, Write};
-use std::process::{Command, Stdio};
 use std::time::Duration;
 use store::{duration, now, Status, Store, Task};
 
 pub const HELP: &str = "Tasks:
-  usix-termux task add \"prompt\"                         queue a task now
-  usix-termux task schedule --after 10m \"prompt\"         run once after a delay
-  usix-termux task schedule --every 1h \"prompt\"          repeat after each completion
-  usix-termux task list                                  list status and saved results
-  usix-termux task show ID                               inspect one task
-  usix-termux task run ID                                run/resume with approval prompts
-  usix-termux task cancel ID                             cancel a waiting task or schedule
-  usix-termux task retry ID                              queue a stopped task from the start
-  usix-termux task remove ID                             delete a stopped task and its history
-  usix-termux worker [--once]                            process due tasks without approvals
+  usix-code task add \"prompt\"                         queue a task now
+  usix-code task schedule --after 10m \"prompt\"         run once after a delay
+  usix-code task schedule --every 1h \"prompt\"          repeat after each completion
+  usix-code task list                                  list status and saved results
+  usix-code task show ID                               inspect one task
+  usix-code task run ID                                run/resume with approval prompts
+  usix-code task cancel ID                             cancel a waiting task or schedule
+  usix-code task retry ID                              queue a stopped task from the start
+  usix-code task remove ID                             delete a stopped task and its history
+  usix-code worker [--once]                            process due tasks without approvals
 
 Durations: 30s, 10m, 1h, 1d (up to one year; repeating minimum 60s).
 Use --after and --every together to set a repeat's first delay.
 The worker must be running for scheduled work to execute. Overdue runs are coalesced.
-Changing phone actions pause for `task run ID`; approvals never carry to future runs.
+Changing actions pause for `task run ID`; approvals never carry to future runs.
 State: ~/.usix/tasks (override with USIX_TASKS_DIR).";
 
-pub fn command(args: &[String]) -> Result<()> {
+pub fn command(args: &[String], host: &dyn Host) -> Result<()> {
     if args.is_empty() || matches!(args[0].as_str(), "--help" | "-h") {
         println!("{HELP}");
         return Ok(());
@@ -39,7 +39,7 @@ pub fn command(args: &[String]) -> Result<()> {
             let (prompt, delay, interval) = parse_create(args)?;
             let task = store.create(&prompt, delay, interval, now())?;
             print_task(&task)?;
-            eprintln!("Queued. Run `usix-termux worker` to execute scheduled tasks.");
+            eprintln!("Queued. Run `usix-code worker` to execute scheduled tasks.");
         }
         "list" => {
             ensure!(args.len() == 1, "usage: task list");
@@ -62,7 +62,7 @@ pub fn command(args: &[String]) -> Result<()> {
             let id = parse_id(args)?;
             let _execution = store.execution_lock()?;
             store.recover()?;
-            let task = execute(&store, id, true)?;
+            let task = execute(&store, id, true, host)?;
             print_task(&task)?;
         }
         other => bail!("unknown task command: {other}\n{HELP}"),
@@ -142,12 +142,14 @@ fn confirm(desc: &str) -> Result<bool> {
 }
 
 /// All execution entry points hold the same lock, including ordinary chat and -c.
-fn execute(store: &Store, id: u64, interactive: bool) -> Result<Task> {
-    let llm = crate::backend();
-    let registry = Registry::new(crate::tools::default_tools());
+fn execute(store: &Store, id: u64, interactive: bool, host: &dyn Host) -> Result<Task> {
+    let llm = crate::backend()?;
+    let registry = Registry::new(host.tools());
+    let skills = crate::adapters::skills::load(host.bundled_skills());
+    host.reset_tools();
     let mut backend_guard = None;
     let mut prepare = || {
-        backend_guard = Some(BackendServeGuard::start()?);
+        backend_guard = Some(BackendServeGuard::start(host)?);
         Ok(())
     };
     let mut decide = confirm;
@@ -157,17 +159,25 @@ fn execute(store: &Store, id: u64, interactive: bool) -> Result<Task> {
         } else {
             None
         };
-    runner::run(store, id, llm.as_ref(), &registry, approval, &mut prepare)
+    runner::run(
+        store,
+        id,
+        llm.as_ref(),
+        &registry,
+        skills,
+        approval,
+        &mut prepare,
+    )
 }
 
-pub fn worker(args: &[String]) -> Result<()> {
+pub fn worker(args: &[String], host: &dyn Host) -> Result<()> {
     if args == ["--help"] || args == ["-h"] {
         println!("{HELP}");
         return Ok(());
     }
     ensure!(
         args.is_empty() || args == ["--once"],
-        "usage: usix-termux worker [--once]"
+        "usage: usix-code worker [--once]"
     );
     let once = !args.is_empty();
     let store = Store::default_location()?;
@@ -194,15 +204,15 @@ pub fn worker(args: &[String]) -> Result<()> {
                     {
                         continue;
                     }
-                    match execute(&store, id, false) {
+                    match execute(&store, id, false, host) {
                         Ok(task) => {
                             print_task(&task)?;
-                            notify(&task);
+                            notify(&task, host);
                         }
                         Err(error) => {
                             eprintln!("{}", json!({"task": id, "error": format!("{error:#}")}));
                             if let Ok(task) = store.get(id) {
-                                notify(&task);
+                                notify(&task, host);
                             }
                         }
                     }
@@ -226,31 +236,19 @@ fn is_busy(error: &anyhow::Error) -> bool {
     })
 }
 
-fn notify(task: &Task) {
+fn notify(task: &Task, host: &dyn Host) {
     let content = if task.status == Status::AwaitingApproval {
         format!(
-            "Task {} needs approval. Run: usix-termux task run {}",
+            "Task {} needs approval. Run: usix-code task run {}",
             task.id, task.id
         )
     } else {
         format!(
-            "Task {}: {:?}. View: usix-termux task show {}",
+            "Task {}: {:?}. View: usix-code task show {}",
             task.id, task.status, task.id
         )
     };
-    let _ = Command::new("timeout")
-        .args([
-            "8",
-            "termux-notification",
-            "--title",
-            "USIX task",
-            "--content",
-            &content,
-        ])
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status();
+    host.notify(&content);
 }
 
 #[cfg(test)]

@@ -87,7 +87,7 @@ impl Tool for Shell {
         "shell"
     }
     fn description(&self) -> &str {
-        "bash 셸 명령을 실행하고 stdout·stderr·종료코드를 돌려준다. 파일·git·pkg 등 폰의 셸 작업 전반에 쓴다."
+        "이 기기에서 bash 셸 명령을 실행하고 stdout·stderr·종료코드를 돌려준다. 코드·파일·git·테스트 등 로컬 작업에 쓴다."
     }
     fn parameters(&self) -> Value {
         json!({

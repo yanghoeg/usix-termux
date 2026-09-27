@@ -277,13 +277,14 @@ fn inline(text: &str, base: Style) -> Vec<Span<'static>> {
             }
         }
         // ~~strike~~
-        if c == '~' && chars.get(i + 1) == Some(&'~') {
-            if strike || has_closing_delimiter(&chars, i, '~', 2) {
-                flush(&mut spans, &mut buf, base, bold, italic, strike);
-                strike = !strike;
-                i += 2;
-                continue;
-            }
+        if c == '~'
+            && chars.get(i + 1) == Some(&'~')
+            && (strike || has_closing_delimiter(&chars, i, '~', 2))
+        {
+            flush(&mut spans, &mut buf, base, bold, italic, strike);
+            strike = !strike;
+            i += 2;
+            continue;
         }
 
         buf.push(c);
