@@ -20,6 +20,23 @@ skills in `~/.usix/skills` are preserved. A `llama-gpu` wrapper already on PATH 
 used for a device-specific OpenCL setup; without it, `llama-server` runs directly.
 GPU packages are optional and should match the device.
 
+## Native validation
+
+CI compiles and links an Android ARM64 executable with the NDK. It does not run
+inside Termux or verify phone permissions. From the repository on a Termux device:
+
+```sh
+pkg install python
+sh scripts/validate-termux.sh
+sh scripts/validate-termux.sh --model /path/to/existing.gguf
+```
+
+The script checks architecture boundaries, formatting, compilation, Rust tests,
+Clippy, installer fixtures, and the CLI. The optional model check reads a temporary
+file through real local inference and verifies its marker. It uses an existing
+GGUF and does not download a model. Phone tools still need their own permission
+and application checks. No boot service is installed.
+
 ## Phone UI control (experimental)
 
 Beyond `termux-api`, the agent can read and operate the visible phone UI through the separate

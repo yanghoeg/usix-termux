@@ -1,6 +1,7 @@
 // ADAPTER — 로컬 llama.cpp llama-server 의 OpenAI 호환 /v1/chat/completions.
 // jinja 템플릿이 기본 켜져 있어(Qwen2.5) tools 배열을 넣으면 tool_calls 로 돌려준다.
 // 동기 HTTP(ureq), TLS 없음. 모델 로드는 서버 기동 시 결정되므로 여기선 model 필드 불필요.
+use crate::domain::context::Budget;
 use crate::ports::Llm;
 use anyhow::{anyhow, Result};
 use serde_json::{json, Value};
@@ -8,22 +9,28 @@ use std::io::BufRead;
 
 pub struct LlamaCpp {
     url: String,
+    budget: Budget,
 }
 
 impl LlamaCpp {
-    pub fn new() -> Self {
+    pub fn new(budget: Budget, port: u16) -> Self {
         Self {
-            url: format!("http://127.0.0.1:{}/v1/chat/completions", super::LLAMA_PORT),
+            url: format!("http://127.0.0.1:{port}/v1/chat/completions"),
+            budget,
         }
     }
 }
 
 impl Llm for LlamaCpp {
+    fn budget(&self) -> Budget {
+        self.budget
+    }
     fn chat(&self, messages: &[Value], tools: &[Value]) -> Result<Value> {
         let mut body = json!({
             "messages": messages,
             "stream": false,
             "temperature": 0,
+            "max_tokens": self.budget.output_tokens,
             // Qwen3 계열 사고(thinking) 모드 끔 — 켜지면 reasoning_content 로 새고 content 가 비어
             // 빈 응답이 나간다. 이 kwarg 를 안 쓰는 템플릿(hammer·qwen2.5)에선 무시된다.
             "chat_template_kwargs": { "enable_thinking": false },
@@ -60,6 +67,7 @@ impl Llm for LlamaCpp {
             "messages": messages,
             "stream": true,
             "temperature": 0,
+            "max_tokens": self.budget.output_tokens,
             "chat_template_kwargs": { "enable_thinking": false },
         });
         if !tools.is_empty() {
@@ -107,6 +115,7 @@ impl Llm for LlamaCpp {
             if let Some(arr) = delta.get("tool_calls").and_then(|v| v.as_array()) {
                 for tc in arr {
                     let idx = tc.get("index").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+                    anyhow::ensure!(idx < 32, "model returned an invalid tool-call index");
                     while calls.len() <= idx {
                         calls.push((String::new(), String::new(), String::new()));
                     }

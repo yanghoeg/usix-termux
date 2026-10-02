@@ -1,9 +1,14 @@
-use crate::ports::{ApprovalClass, Tool};
-use crate::tasks::store::{now, Store, MAX_SECONDS};
+use crate::adapters::clock::SystemClock;
+use crate::adapters::task_store::FileStore;
+use crate::domain::tasks::MAX_SECONDS;
+use crate::ports::{ApprovalClass, Clock, Tool};
 use anyhow::{Context, Result};
 use serde_json::{json, Value};
+use std::path::PathBuf;
 
-pub struct TaskCreate;
+pub struct TaskCreate {
+    pub workspace: PathBuf,
+}
 impl Tool for TaskCreate {
     fn name(&self) -> &str {
         "task_create"
@@ -34,7 +39,13 @@ impl Tool for TaskCreate {
             ),
             None => None,
         };
-        let task = Store::default_location()?.create(prompt, delay, interval, now())?;
+        let task = FileStore::default_location()?.create(
+            prompt,
+            self.workspace.clone(),
+            delay,
+            interval,
+            SystemClock.now(),
+        )?;
         Ok(json!({"task": task.summary(), "worker_required": true,
             "message": "Task queued; it executes only while `usix-code worker` is running. Changing actions require separate approval."}).to_string())
     }
@@ -55,7 +66,7 @@ impl Tool for TaskList {
         ApprovalClass::ReadOnly
     }
     fn run(&self, args: &Value) -> Result<String> {
-        let store = Store::default_location()?;
+        let store = FileStore::default_location()?;
         if let Some(value) = args.get("id") {
             return Ok(store
                 .get(value.as_u64().context("id must be a positive integer")?)?
@@ -85,11 +96,12 @@ impl Tool for TaskCancel {
         ApprovalClass::Mutating
     }
     fn run(&self, args: &Value) -> Result<String> {
-        Ok(Store::default_location()?
+        Ok(FileStore::default_location()?
             .cancel(
                 args["id"]
                     .as_u64()
                     .context("id must be a positive integer")?,
+                SystemClock.now(),
             )?
             .summary()
             .to_string())

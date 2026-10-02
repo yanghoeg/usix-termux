@@ -1,95 +1,17 @@
-use crate::domain::agent::AgentState;
+use crate::domain::tasks::{Status, Task};
+use crate::ports::TaskStore;
 use anyhow::{anyhow, bail, ensure, Context, Result};
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
 use std::os::fd::AsRawFd;
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{SystemTime, UNIX_EPOCH};
 
-pub const MAX_SECONDS: u64 = 365 * 24 * 60 * 60;
 const MAX_TASKS: usize = 256;
 const MAX_DATABASE_BYTES: u64 = 32 * 1024 * 1024;
 static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
-
-pub fn now() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs()
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Status {
-    Scheduled,
-    Running,
-    AwaitingApproval,
-    Interrupted,
-    Failed,
-    Completed,
-    Cancelled,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct Task {
-    pub id: u64,
-    pub revision: u64,
-    pub prompt: String,
-    pub created_at: u64,
-    pub updated_at: u64,
-    pub next_run_at: Option<u64>,
-    pub interval_secs: Option<u64>,
-    pub status: Status,
-    pub completed_runs: u64,
-    pub checkpoint: Option<AgentState>,
-    /// Persisted before an approved side effect; cleared only after its result is saved.
-    pub action_in_flight: bool,
-    pub approval: Option<String>,
-    pub last_result: Option<String>,
-    pub last_finished_at: Option<u64>,
-    pub error: Option<String>,
-}
-
-impl Task {
-    pub fn summary(&self) -> Value {
-        json!({
-            "id": self.id, "prompt": self.prompt, "status": self.status,
-            "created_at": self.created_at, "updated_at": self.updated_at,
-            "next_run_at": self.next_run_at, "interval_secs": self.interval_secs,
-            "completed_runs": self.completed_runs, "approval": self.approval,
-            "action_in_flight": self.action_in_flight, "last_result": self.last_result,
-            "last_finished_at": self.last_finished_at, "error": self.error,
-        })
-    }
-
-    pub fn finish(&mut self, answer: String, finished_at: u64) -> Result<()> {
-        self.next_run_at = self
-            .interval_secs
-            .map(|s| {
-                finished_at
-                    .checked_add(s)
-                    .ok_or_else(|| anyhow!("schedule timestamp overflow"))
-            })
-            .transpose()?;
-        self.status = if self.next_run_at.is_some() {
-            Status::Scheduled
-        } else {
-            Status::Completed
-        };
-        self.last_result = Some(answer);
-        self.last_finished_at = Some(finished_at);
-        self.completed_runs += 1;
-        self.checkpoint = None;
-        self.approval = None;
-        self.error = None;
-        self.action_in_flight = false;
-        Ok(())
-    }
-}
 
 #[derive(Serialize, Deserialize)]
 struct Database {
@@ -114,11 +36,11 @@ pub struct FileLock {
 }
 
 #[derive(Clone)]
-pub struct Store {
+pub struct FileStore {
     root: PathBuf,
 }
 
-impl Store {
+impl FileStore {
     pub fn default_location() -> Result<Self> {
         let root = match std::env::var_os("USIX_TASKS_DIR") {
             Some(path) => PathBuf::from(path),
@@ -169,8 +91,10 @@ impl Store {
     fn read(&self) -> Result<Database> {
         let file = match private_file().read(true).open(self.root.join("state.json")) {
             Ok(file) => file,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Database::default()),
-            Err(e) => return Err(e.into()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return Ok(Database::default())
+            }
+            Err(error) => return Err(error.into()),
         };
         let mut bytes = Vec::new();
         file.take(MAX_DATABASE_BYTES + 1).read_to_end(&mut bytes)?;
@@ -233,47 +157,24 @@ impl Store {
     pub fn get(&self, id: u64) -> Result<Task> {
         self.list()?
             .into_iter()
-            .find(|t| t.id == id)
+            .find(|task| task.id == id)
             .ok_or_else(|| anyhow!("task {id} not found"))
     }
 
-    pub fn create(&self, prompt: &str, delay: u64, interval: Option<u64>, at: u64) -> Result<Task> {
-        ensure!(
-            !prompt.trim().is_empty() && prompt.len() <= 8192,
-            "prompt must contain 1–8192 bytes"
-        );
-        ensure!(delay <= MAX_SECONDS, "delay cannot exceed one year");
-        if let Some(seconds) = interval {
-            ensure!(
-                (60..=MAX_SECONDS).contains(&seconds),
-                "repeat interval must be between 60 seconds and one year"
-            );
-        }
-        let next_run = at
-            .checked_add(delay)
-            .context("schedule timestamp overflow")?;
+    pub fn create(
+        &self,
+        prompt: &str,
+        workspace: PathBuf,
+        delay: u64,
+        interval: Option<u64>,
+        at: u64,
+    ) -> Result<Task> {
         self.update(|db| {
             ensure!(
                 db.tasks.len() < MAX_TASKS,
                 "task limit reached; remove finished tasks first"
             );
-            let task = Task {
-                id: db.next_id,
-                revision: 0,
-                prompt: prompt.to_owned(),
-                created_at: at,
-                updated_at: at,
-                next_run_at: Some(next_run),
-                interval_secs: interval,
-                status: Status::Scheduled,
-                completed_runs: 0,
-                checkpoint: None,
-                action_in_flight: false,
-                approval: None,
-                last_result: None,
-                last_finished_at: None,
-                error: None,
-            };
+            let task = Task::new(db.next_id, prompt, workspace, delay, interval, at)?;
             db.next_id = db.next_id.checked_add(1).context("task id overflow")?;
             db.tasks.push(task.clone());
             Ok(task)
@@ -281,19 +182,19 @@ impl Store {
     }
 
     /// The execution lock must be held while saving a running task.
-    pub fn save(&self, task: &mut Task) -> Result<()> {
+    pub fn save(&self, task: &mut Task, at: u64) -> Result<()> {
         let updated = self.update(|db| {
             let saved = db
                 .tasks
                 .iter_mut()
-                .find(|t| t.id == task.id)
+                .find(|saved| saved.id == task.id)
                 .context("task disappeared")?;
             ensure!(
                 saved.revision == task.revision,
                 "task changed while running; reload it before continuing"
             );
             *saved = task.clone();
-            saved.updated_at = now();
+            saved.updated_at = at;
             saved.revision += 1;
             Ok(saved.clone())
         })?;
@@ -302,8 +203,12 @@ impl Store {
     }
 
     /// Called only with the execution lock held, so no live execution is recovered.
-    pub fn recover(&self) -> Result<()> {
-        if !self.list()?.iter().any(|t| t.status == Status::Running) {
+    pub fn recover(&self, at: u64) -> Result<()> {
+        if !self
+            .list()?
+            .iter()
+            .any(|task| task.status == Status::Running)
+        {
             return Ok(());
         }
         self.update(|db| {
@@ -315,7 +220,7 @@ impl Store {
                     } else {
                         "Execution was interrupted. Run this task to resume its saved checkpoint."
                     }.into());
-                    task.updated_at = now();
+                    task.updated_at = at;
                     task.revision += 1;
                 }
             }
@@ -323,12 +228,12 @@ impl Store {
         })
     }
 
-    pub fn cancel(&self, id: u64) -> Result<Task> {
+    pub fn cancel(&self, id: u64, at: u64) -> Result<Task> {
         self.update(|db| {
             let task = db
                 .tasks
                 .iter_mut()
-                .find(|t| t.id == id)
+                .find(|task| task.id == id)
                 .context("task not found")?;
             ensure!(
                 task.status != Status::Running,
@@ -338,20 +243,20 @@ impl Store {
             task.next_run_at = None;
             task.checkpoint = None;
             task.approval = None;
-            task.updated_at = now();
+            task.updated_at = at;
             task.revision += 1;
             Ok(task.clone())
         })
     }
 
-    pub fn retry(&self, id: u64) -> Result<Task> {
+    pub fn retry(&self, id: u64, at: u64) -> Result<Task> {
         let _execution = self.execution_lock()?;
-        self.recover()?;
+        self.recover(at)?;
         self.update(|db| {
             let task = db
                 .tasks
                 .iter_mut()
-                .find(|t| t.id == id)
+                .find(|task| task.id == id)
                 .context("task not found")?;
             ensure!(
                 matches!(
@@ -361,12 +266,39 @@ impl Store {
                 "only stopped tasks can be retried"
             );
             task.status = Status::Scheduled;
-            task.next_run_at = Some(now());
+            task.next_run_at = Some(at);
             task.checkpoint = None;
             task.approval = None;
             task.action_in_flight = false;
             task.error = None;
-            task.updated_at = now();
+            task.updated_at = at;
+            task.revision += 1;
+            Ok(task.clone())
+        })
+    }
+
+    pub fn bind(&self, id: u64, workspace: PathBuf, at: u64) -> Result<Task> {
+        ensure!(workspace.is_absolute(), "task workspace must be absolute");
+        let _execution = self.execution_lock()?;
+        self.recover(at)?;
+        self.update(|db| {
+            let task = db
+                .tasks
+                .iter_mut()
+                .find(|task| task.id == id)
+                .context("task not found")?;
+            ensure!(
+                !matches!(task.status, Status::Running | Status::AwaitingApproval),
+                "stop or cancel the task before binding its workspace"
+            );
+            ensure!(!task.action_in_flight,
+                "an approved action may have executed; inspect the affected state, then use `task retry {id}` before binding if starting over is appropriate");
+            ensure!(task.checkpoint.is_none(),
+                "task has a saved checkpoint; use `task retry {id}` to discard it before binding a workspace");
+            task.workspace = Some(workspace);
+            task.approval = None;
+            task.error = None;
+            task.updated_at = at;
             task.revision += 1;
             Ok(task.clone())
         })
@@ -377,7 +309,7 @@ impl Store {
             let task = db
                 .tasks
                 .iter()
-                .find(|t| t.id == id)
+                .find(|task| task.id == id)
                 .context("task not found")?;
             if !matches!(
                 task.status,
@@ -385,9 +317,19 @@ impl Store {
             ) {
                 bail!("cancel the task before removing it");
             }
-            db.tasks.retain(|t| t.id != id);
+            db.tasks.retain(|task| task.id != id);
             Ok(())
         })
+    }
+}
+
+impl TaskStore for FileStore {
+    fn get(&self, id: u64) -> Result<Task> {
+        FileStore::get(self, id)
+    }
+
+    fn save(&self, task: &mut Task, at: u64) -> Result<()> {
+        FileStore::save(self, task, at)
     }
 }
 
@@ -399,36 +341,15 @@ fn private_file() -> OpenOptions {
     options
 }
 
-pub fn duration(text: &str) -> Result<u64> {
-    let (number, multiplier) = match text.as_bytes().last() {
-        Some(b's') => (&text[..text.len() - 1], 1),
-        Some(b'm') => (&text[..text.len() - 1], 60),
-        Some(b'h') => (&text[..text.len() - 1], 3600),
-        Some(b'd') => (&text[..text.len() - 1], 86400),
-        _ => (text, 1),
-    };
-    ensure!(
-        !number.is_empty() && number.bytes().all(|b| b.is_ascii_digit()),
-        "use a duration such as 30s, 10m, 1h, or 1d"
-    );
-    let seconds = number
-        .parse::<u64>()?
-        .checked_mul(multiplier)
-        .context("duration overflow")?;
-    ensure!(
-        (1..=MAX_SECONDS).contains(&seconds),
-        "duration must be between one second and one year"
-    );
-    Ok(seconds)
-}
-
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+    use crate::domain::tasks::MAX_SECONDS;
     use std::os::unix::fs::{symlink, PermissionsExt};
 
     pub struct Fixture {
-        pub store: Store,
+        pub store: FileStore,
+        pub workspace: PathBuf,
     }
 
     impl Fixture {
@@ -438,9 +359,16 @@ pub(crate) mod tests {
                 std::process::id(),
                 TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed)
             ));
-            Self {
-                store: Store::open(root).unwrap(),
-            }
+            let workspace = root.join("workspace");
+            let store = FileStore::open(root).unwrap();
+            fs::create_dir_all(&workspace).unwrap();
+            Self { store, workspace }
+        }
+
+        pub fn create(&self, prompt: &str, delay: u64, interval: Option<u64>, at: u64) -> Task {
+            self.store
+                .create(prompt, self.workspace.clone(), delay, interval, at)
+                .unwrap()
         }
     }
 
@@ -453,15 +381,13 @@ pub(crate) mod tests {
     #[test]
     fn schedules_survive_reopening_with_private_storage() {
         let fixture = Fixture::new();
-        let first = fixture
-            .store
-            .create("check battery", 30, Some(60), 100)
-            .unwrap();
-        let reopened = Store::open(&fixture.store.root).unwrap();
+        let first = fixture.create("check battery", 30, Some(60), 100);
+        let reopened = FileStore::open(&fixture.store.root).unwrap();
         let loaded = reopened.get(first.id).unwrap();
         assert_eq!(loaded.next_run_at, Some(130));
         assert_eq!(loaded.interval_secs, Some(60));
         assert_eq!(loaded.prompt, "check battery");
+        assert_eq!(loaded.workspace, Some(fixture.workspace.clone()));
         assert_eq!(
             fs::metadata(reopened.root.join("state.json"))
                 .unwrap()
@@ -482,14 +408,23 @@ pub(crate) mod tests {
         std::thread::scope(|scope| {
             for _ in 0..8 {
                 let store = &fixture.store;
+                let workspace = fixture.workspace.clone();
                 scope.spawn(move || {
                     for _ in 0..5 {
-                        store.create("check", 0, None, 100).unwrap();
+                        store
+                            .create("check", workspace.clone(), 0, None, 100)
+                            .unwrap();
                     }
                 });
             }
         });
-        let mut ids: Vec<_> = fixture.store.list().unwrap().iter().map(|t| t.id).collect();
+        let mut ids: Vec<_> = fixture
+            .store
+            .list()
+            .unwrap()
+            .iter()
+            .map(|task| task.id)
+            .collect();
         ids.sort_unstable();
         assert_eq!(ids, (1..=40).collect::<Vec<_>>());
     }
@@ -499,8 +434,7 @@ pub(crate) mod tests {
         let fixture = Fixture::new();
         let execution = fixture.store.execution_lock().unwrap();
         assert!(fixture.store.execution_lock().is_err());
-        // Store updates do not block on the harness execution lock.
-        fixture.store.create("check", 0, None, 100).unwrap();
+        fixture.create("check", 0, None, 100);
         drop(execution);
         assert!(fixture.store.execution_lock().is_ok());
         let worker = fixture.store.worker_lock().unwrap();
@@ -514,7 +448,10 @@ pub(crate) mod tests {
         let fixture = Fixture::new();
         let state = fixture.store.root.join("state.json");
         fs::write(&state, "broken").unwrap();
-        assert!(fixture.store.create("check", 0, None, 100).is_err());
+        assert!(fixture
+            .store
+            .create("check", fixture.workspace.clone(), 0, None, 100)
+            .is_err());
         assert_eq!(fs::read_to_string(&state).unwrap(), "broken");
         fs::remove_file(&state).unwrap();
         let target = fixture.store.root.join("other.json");
@@ -526,43 +463,57 @@ pub(crate) mod tests {
     #[test]
     fn repeat_coalesces_missed_runs_and_cancel_stops_the_schedule() {
         let fixture = Fixture::new();
-        let mut task = fixture.store.create("check", 60, Some(60), 100).unwrap();
+        let mut task = fixture.create("check", 60, Some(60), 100);
         task.finish("battery 50%".into(), 10000).unwrap();
-        fixture.store.save(&mut task).unwrap();
+        fixture.store.save(&mut task, 10001).unwrap();
         assert_eq!(task.next_run_at, Some(10060));
         assert_eq!(task.completed_runs, 1);
         assert_eq!(task.status, Status::Scheduled);
-        let cancelled = fixture.store.cancel(task.id).unwrap();
+        assert_eq!(task.updated_at, 10001);
+        let cancelled = fixture.store.cancel(task.id, 10002).unwrap();
         assert_eq!(cancelled.next_run_at, None);
         assert_eq!(cancelled.status, Status::Cancelled);
-        assert!(fixture.store.save(&mut task).is_err());
+        assert!(fixture.store.save(&mut task, 10003).is_err());
         fixture.store.remove(task.id).unwrap();
         assert!(fixture.store.list().unwrap().is_empty());
     }
 
     #[test]
-    fn validates_schedule_bounds_and_durations() {
+    fn binding_requires_safe_checkpoint_free_state() {
         let fixture = Fixture::new();
-        for text in [
-            "0",
-            "-1",
-            "1.5h",
-            "",
-            "1w",
-            "366d",
-            "999999999999999999999h",
-            "1h\n",
-        ] {
-            assert!(duration(text).is_err(), "{text:?}");
-        }
-        assert_eq!(duration("2h").unwrap(), 7200);
-        assert_eq!(duration("30").unwrap(), 30);
-        assert!(fixture.store.create(" ", 0, None, 100).is_err());
-        assert!(fixture.store.create("check", 0, Some(59), 100).is_err());
+        let task = fixture.create("check", 0, None, 100);
+        let rebound = fixture
+            .store
+            .bind(task.id, fixture.workspace.clone(), 101)
+            .unwrap();
+        assert_eq!(rebound.updated_at, 101);
+        assert_eq!(rebound.workspace, Some(fixture.workspace.clone()));
+    }
+
+    #[test]
+    fn create_still_rejects_invalid_schedule_values() {
+        let fixture = Fixture::new();
         assert!(fixture
             .store
-            .create("check", MAX_SECONDS + 1, None, 100)
+            .create(" ", fixture.workspace.clone(), 0, None, 100)
             .is_err());
-        assert!(fixture.store.create("check", 1, None, u64::MAX).is_err());
+        assert!(fixture
+            .store
+            .create("check", fixture.workspace.clone(), 0, Some(59), 100)
+            .is_err());
+        assert!(fixture
+            .store
+            .create(
+                "check",
+                fixture.workspace.clone(),
+                MAX_SECONDS + 1,
+                None,
+                100
+            )
+            .is_err());
+        assert!(fixture
+            .store
+            .create("check", fixture.workspace.clone(), 1, None, u64::MAX)
+            .is_err());
     }
 }

@@ -18,13 +18,32 @@ Use the ID returned by `task add` in later commands. `worker --once` processes a
 snapshot of tasks currently due. It uses the configured local model and saves the
 result of every tool step. It does not approve changing actions.
 
+Tasks save the canonical project directory where they were created. Relative file
+paths and shell commands resolve there even when a worker starts elsewhere;
+explicit absolute paths remain possible. This binding is not a filesystem sandbox.
+A missing or changed workspace fails before model startup or tool execution and
+pauses scheduled work instead of retrying it every worker cycle.
+
+Older task records without a workspace need an explicit binding:
+
+```sh
+usix-code task bind 1 /path/to/project
+```
+
+Omit the directory to use the current one. Binding requires a stopped task without
+an execution checkpoint or unfinished action. Inspect previously performed work
+before using `task retry`, which clears its checkpoint and can repeat actions.
+After fixing a failed task's binding, use `task run ID` to run it or `task retry ID`
+to queue it for the worker.
+
 For a task that requires approval, inspect and resume it:
 
 ```sh
 usix-code task run 1
 ```
 
-The command shows the exact tool and arguments before each changing action.
+The command shows the exact tool and complete resolved arguments before each
+changing action. Control characters are escaped and long arguments are not truncated.
 Approval requires an interactive terminal. A non-interactive invocation leaves the
 task waiting. Declining an action cancels that task, its remaining calls, and its
 repeat schedule. Read the tool results and check the affected application for actions such as

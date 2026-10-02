@@ -91,13 +91,28 @@ usix-code
 
 Termux setup can install `ollama`. On Linux, follow the
 [Ollama Linux instructions](https://docs.ollama.com/linux) first. Harness-started
-Ollama processes set `OLLAMA_NO_CLOUD=1` and bind to `127.0.0.1:11434`. Use downloaded
-local model tags; disable cloud features yourself when managing the server.
-llama.cpp binds to `127.0.0.1:8080`. Model HTTP requests do not follow redirects.
+Ollama processes set `OLLAMA_NO_CLOUD=1`. Before each inference, the harness checks
+the model's local GGUF metadata through `/api/show`. Remote aliases and unverifiable
+models are rejected before sending conversation data, including on an existing
+server. See Ollama's [API response fields](https://github.com/ollama/ollama/blob/main/api/types.go).
 
-Logs live in `~/.usix/logs`. Setup leaves its server running. Chat and workers stop
-only the server process they started; an existing server stays running. There is
-no automatic startup service.
+llama.cpp uses `127.0.0.1:8080` and Ollama uses `127.0.0.1:11434`.
+`USIX_LLAMA_PORT` and `USIX_OLLAMA_PORT` override those ports; the address stays
+loopback-only. Model HTTP requests do not follow redirects.
+
+Logs live in `~/.usix/logs`. Setup, chat, and workers stop the backend they start.
+A private pipe connects each owned backend's supervisor to its harness process;
+closing it, including after a signal or crash, stops the backend process group and
+its wrapper descendants. Existing servers stay running. There is no harness daemon
+or automatic startup service; local inference still needs a model engine process.
+
+The default context budget is 8192 tokens with 1024 reserved for model output.
+Configure it with `USIX_CONTEXT_TOKENS` and `USIX_OUTPUT_TOKENS`. Before inference,
+the harness estimates messages and tool schemas with extra safety space, removes
+older completed turns, then shortens large tool results with explicit markers.
+It preserves the latest request, tool arguments, and call/result pairs and rejects
+requests that still exceed the budget. This is a conservative estimate, not the
+model's exact tokenizer.
 
 ## Usage and tools
 
@@ -114,7 +129,8 @@ usix-code worker --once    # process currently due work
 | `read_file`, `list_dir`, `task_list` | Automatic |
 | `shell`, `write_file`, `task_create`, `task_cancel` | Required |
 
-Changing actions require human approval. One-shot queries deny them; background
+Changing actions show complete, escaped arguments and resolved file paths before
+human approval. One-shot queries deny them; background
 tasks wait for approval through `usix-code task run ID`. Tools use your OS account's
 access; approval is not a filesystem sandbox. [Task guide](docs/tasks.md).
 
@@ -123,8 +139,10 @@ coding workflow; Termux adds SMS, mail, and chat workflows. User-edited skills a
 preserved. Ordinary chat history is session-local; saved tasks persist.
 
 TUI: `Enter` submits, `Ctrl+J` inserts a newline, `↑`/`↓` browse history,
-`Ctrl+A`/`Ctrl+E` move to line boundaries, and `! command` proposes a shell command.
+`Ctrl+A`/`Ctrl+E` move to line boundaries, and `! command` runs your explicit shell command.
 `exit`, `quit`, or `Ctrl+D` on an empty input leaves the session.
+`USIX_THEME=dark|light|mono` selects the theme. `NO_COLOR` disables styling;
+terminal capabilities determine true color, 256-color, or 16-color output.
 
 ## Hexagonal architecture
 
@@ -135,7 +153,7 @@ CLI / TUI / task worker
    Agent + approvals + task runner
           │
           ▼
-   Llm / Tool / Host ports
+   Llm / Tool / Host / TaskStore / Clock ports
           │
      ┌────┴──────────────┐
      ▼                   ▼
@@ -143,12 +161,15 @@ Linux / Termux       llama.cpp / Ollama
 host adapters       loopback LLM adapters
 ```
 
-- `domain/`: agent, registry, skill parsing/selection; no OS detection, filesystem
+- `domain/`: agent, registry, task models, context budgeting, skill parsing/selection; no OS detection, filesystem
   skill loading, package commands, or concrete adapter imports.
-- `ports.rs`: `Llm`, `Tool`, and `Host` contracts. Approval decisions stay in the core.
+- `ports.rs`: `Llm`, `Tool`, `Host`, `TaskStore`, and `Clock` contracts. Approval decisions stay in the core.
+- `tasks/runner.rs`: task execution through injected storage and clock ports.
 - `adapters/host/`: installation, tools, bundled skills, diagnostics, pairing,
   task notifications, and device state reset for each host.
-- `adapters/skills.rs`, `adapters/runtime.rs`: filesystem and process I/O.
+- `adapters/skills.rs`, `adapters/task_store.rs`, `adapters/clock.rs`,
+  `adapters/workspace.rs`, `adapters/runtime.rs`: filesystem, time, workspace binding,
+  and process I/O.
 - `bootstrap.rs`: setup and backend lifecycle through the selected host.
 - `main.rs`: selects and injects the host through `adapters::host::current`.
 
@@ -160,13 +181,16 @@ support requires adapters and validation, not just another installer label.
 
 ```sh
 cargo fmt --check
+python3 tests/architecture.py
 cargo test --locked
 cargo clippy --locked --all-targets -- -D warnings
 python3 tests/install_smoke.py
 ```
 
-CI runs native Linux tests and an Android ARM64 compile check. Device testing is
-still needed for Termux model execution and Android tools.
+CI runs native Linux tests and Android ARM64 compilation and NDK linking.
+On a Termux device, run `sh scripts/validate-termux.sh`, optionally with
+`--model /path/to/existing.gguf` to exercise real inference and local file access.
+Cross-compilation does not verify device execution or Android permissions.
 
 The former `usix-termux` package and executable are now `usix-code`. Existing
 `~/.usix` skills, tasks, and companion tokens keep their paths. Update aliases and

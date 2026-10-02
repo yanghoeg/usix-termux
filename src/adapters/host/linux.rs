@@ -14,8 +14,8 @@ impl Host for Linux {
         "Linux"
     }
 
-    fn tools(&self) -> Vec<Box<dyn Tool>> {
-        crate::tools::local_tools()
+    fn tools(&self, workspace: &std::path::Path) -> Vec<Box<dyn Tool>> {
+        crate::adapters::workspace::tools(crate::tools::local_tools(workspace), workspace)
     }
 
     fn bundled_skills(&self) -> &'static [BundledSkill] {
@@ -44,5 +44,9 @@ impl Host for Linux {
     fn doctor(&self) -> Result<()> {
         println!("Local file, shell, and task tools enabled.");
         Ok(())
+    }
+
+    fn notify(&self, content: &str) {
+        eprintln!("{content}");
     }
 }

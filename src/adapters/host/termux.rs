@@ -11,8 +11,8 @@ impl Host for Termux {
         "Android Termux"
     }
 
-    fn tools(&self) -> Vec<Box<dyn Tool>> {
-        let mut tools = crate::tools::local_tools();
+    fn tools(&self, workspace: &std::path::Path) -> Vec<Box<dyn Tool>> {
+        let mut tools = crate::tools::local_tools(workspace);
         let phone: Vec<Box<dyn Tool>> = vec![
             Box::new(read::SmsList),
             Box::new(read::CallLog),
@@ -34,7 +34,7 @@ impl Host for Termux {
             Box::new(companion::NotifReply),
         ];
         tools.extend(phone);
-        tools
+        crate::adapters::workspace::tools(tools, workspace)
     }
 
     fn bundled_skills(&self) -> &'static [BundledSkill] {

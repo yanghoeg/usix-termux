@@ -1,6 +1,7 @@
 // DOMAIN — step 기반 function-calling 루프.
 // usix의 PermissionRequest 처럼, 변경 도구는 실행하지 않고 `NeedApproval` 로 UI에 넘긴다.
 // UI가 approve(true/false)로 결정을 돌려주면 이어서 진행한다.
+use crate::domain::context;
 use crate::domain::registry::Registry;
 use crate::domain::skills::Skill;
 use crate::ports::{ApprovalClass, Llm};
@@ -48,6 +49,9 @@ pub struct Agent<'a> {
 }
 
 impl<'a> Agent<'a> {
+    pub fn skills_count(&self) -> usize {
+        self.skills.len()
+    }
     pub fn new(llm: &'a dyn Llm, registry: &'a Registry, skills: Vec<Skill>) -> Self {
         // 스킬은 로드만 해두고, 프롬프트에는 submit에서 요청 관련분만 얹는다. 무관한
         // 스킬 지침이 끼면 소형 모델이 후속 절차를 놓쳐(빈 응답) 흐름이 깨진다.
@@ -193,6 +197,10 @@ impl<'a> Agent<'a> {
     pub fn advance_step(&mut self, sink: &mut dyn FnMut(&str)) -> Result<Option<Turn>> {
         if let Some(call) = &self.awaiting {
             let (name, args) = parse_call(call);
+            let args = self
+                .registry
+                .get(&name)
+                .map_or(args.clone(), |t| t.approval_arguments(&args));
             return Ok(Some(Turn::NeedApproval {
                 desc: format!("{name} {args}"),
             }));
@@ -207,6 +215,7 @@ impl<'a> Agent<'a> {
                     self.push_tool_result(&id, format!("알 수 없는 도구: {name}"));
                 }
                 Some(t) if t.approval() == ApprovalClass::Mutating => {
+                    let args = t.approval_arguments(&args);
                     // 승인 대기로 넘기고 UI에 알림.
                     self.pending.pop_front();
                     self.awaiting = Some(call);
@@ -236,6 +245,8 @@ impl<'a> Agent<'a> {
             "tool-call step limit ({MAX_STEPS}) reached"
         );
 
+        // Compact only between complete tool batches, never across a pending approval.
+        context::fit(&mut self.messages, &self.tools_schema, self.llm.budget())?;
         // 3) 모델 호출 (최종 답변은 sink 로 스트리밍).
         let mut msg = self
             .llm
@@ -279,6 +290,7 @@ impl<'a> Agent<'a> {
     /// 방금 저장한 빈 assistant 응답을 걷어내고, 도구 스키마 없이 다시 물어 자연어 답을 받는다.
     fn answer_without_tools(&mut self, sink: &mut dyn FnMut(&str)) -> Result<String> {
         self.messages.pop();
+        context::fit(&mut self.messages, &[], self.llm.budget())?;
         let msg = self.llm.chat_stream(&self.messages, &[], sink)?;
         ensure!(
             msg.get("tool_calls")

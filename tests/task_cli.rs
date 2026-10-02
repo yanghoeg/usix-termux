@@ -1,7 +1,7 @@
 use serde_json::Value;
 use std::fs::{self, OpenOptions};
 use std::os::fd::AsRawFd;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -23,8 +23,13 @@ impl Cli {
     }
 
     fn run(&self, args: &[&str]) -> Output {
+        self.run_in(args, Path::new(env!("CARGO_MANIFEST_DIR")))
+    }
+
+    fn run_in(&self, args: &[&str], directory: &Path) -> Output {
         Command::new(env!("CARGO_BIN_EXE_usix-code"))
             .args(args)
+            .current_dir(directory)
             .env("USIX_TASKS_DIR", &self.root)
             .env_remove("USIX_BACKEND")
             .env_remove("USIX_MODEL")
@@ -41,6 +46,101 @@ impl Cli {
         );
         serde_json::from_slice(&output.stdout).unwrap()
     }
+}
+
+#[test]
+fn task_workspace_survives_processes_started_from_another_directory() {
+    let cli = Cli::new();
+    let first = cli.root.join("first workspace");
+    let second = cli.root.join("second workspace");
+    fs::create_dir_all(&first).unwrap();
+    fs::create_dir_all(&second).unwrap();
+    let created: Value = serde_json::from_slice(
+        &cli.run_in(&["task", "add", "inspect local files"], &first)
+            .stdout,
+    )
+    .unwrap();
+    assert_eq!(
+        created["workspace"],
+        first.canonicalize().unwrap().to_string_lossy().as_ref()
+    );
+    let shown: Value =
+        serde_json::from_slice(&cli.run_in(&["task", "show", "1"], &second).stdout).unwrap();
+    assert_eq!(shown["workspace"], created["workspace"]);
+}
+
+#[test]
+fn legacy_unbound_task_is_rejected_before_backend_selection() {
+    let cli = Cli::new();
+    let workspace = cli.root.join("workspace");
+    fs::create_dir_all(&workspace).unwrap();
+    assert!(cli
+        .run_in(&["task", "add", "inspect local files"], &workspace)
+        .status
+        .success());
+    let state_path = cli.root.join("state.json");
+    let mut state: Value = serde_json::from_slice(&fs::read(&state_path).unwrap()).unwrap();
+    state["tasks"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("workspace");
+    fs::write(&state_path, serde_json::to_vec(&state).unwrap()).unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_usix-code"))
+        .args(["task", "run", "1"])
+        .current_dir(&workspace)
+        .env("USIX_TASKS_DIR", &cli.root)
+        .env("USIX_BACKEND", "invalid-if-reached")
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    let error = String::from_utf8_lossy(&output.stderr);
+    assert!(error.contains("has no workspace"), "{error}");
+    assert!(!error.contains("unknown USIX_BACKEND"), "{error}");
+
+    let rebound = cli.run_in(&["task", "bind", "1", second_arg(&workspace)], &workspace);
+    assert!(
+        rebound.status.success(),
+        "{}",
+        String::from_utf8_lossy(&rebound.stderr)
+    );
+    let rebound: Value = serde_json::from_slice(&rebound.stdout).unwrap();
+    assert_eq!(
+        rebound["workspace"],
+        workspace.canonicalize().unwrap().to_string_lossy().as_ref()
+    );
+}
+
+fn second_arg(path: &Path) -> &str {
+    path.to_str().unwrap()
+}
+
+#[test]
+fn missing_workspace_pauses_scheduled_work_before_model_startup() {
+    let cli = Cli::new();
+    let workspace = cli.root.join("workspace");
+    fs::create_dir_all(&workspace).unwrap();
+    assert!(cli
+        .run_in(&["task", "add", "inspect local files"], &workspace)
+        .status
+        .success());
+    fs::remove_dir(&workspace).unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_usix-code"))
+        .args(["worker", "--once"])
+        .env("USIX_TASKS_DIR", &cli.root)
+        .env("USIX_BACKEND", "invalid-if-reached")
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let error = String::from_utf8_lossy(&output.stderr);
+    assert!(error.contains("workspace is unavailable"), "{error}");
+    assert!(!error.contains("unknown USIX_BACKEND"), "{error}");
+    let task = cli.json(&["task", "show", "1"]);
+    assert_eq!(task["status"], "failed");
+    assert!(task["error"]
+        .as_str()
+        .unwrap()
+        .contains("workspace is unavailable"));
 }
 
 #[test]

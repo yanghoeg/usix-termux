@@ -87,12 +87,23 @@ usix-code setup
 usix-code
 ```
 
-하네스가 시작하는 Ollama에는 `OLLAMA_NO_CLOUD=1`을 설정합니다. 직접 관리하는
-서버에서도 클라우드 기능을 끄고 다운로드한 로컬 모델을 사용하세요.
+하네스가 시작하는 Ollama에는 `OLLAMA_NO_CLOUD=1`을 설정합니다. 추론할 때마다
+`/api/show`의 로컬 GGUF 메타데이터를 확인합니다. 기존 서버를 사용하는 경우에도
+원격 모델 별칭이나 로컬 여부를 확인할 수 없는 모델은 대화 내용을 보내기 전에 거부합니다.
 추론 연결은 llama.cpp의 `127.0.0.1:8080` 또는 Ollama의 `127.0.0.1:11434`를 사용하며
+`USIX_LLAMA_PORT`, `USIX_OLLAMA_PORT`로 포트만 바꿀 수 있습니다.
 HTTP 리다이렉트는 따르지 않습니다. 로그는 `~/.usix/logs`에 저장합니다.
-`setup`이 준비한 서버는 계속 실행됩니다. 대화나 워커가 직접 시작한 서버는 종료할 때
-정리하며 기존 서버는 유지합니다. 자동 시작 서비스는 설치하지 않습니다.
+설치 준비·대화·워커가 직접 시작한 서버는 종료할 때 정리하며 기존 서버는 유지합니다.
+전용 파이프와 감독 프로세스가 하네스의 종료를 감지하므로 시그널이나 비정상 종료에도
+직접 시작한 서버와 GPU 래퍼의 자식 프로세스를 정리합니다. 하네스 데몬이나 자동 시작
+서비스는 필요하지 않지만 로컬 추론용 모델 엔진 프로세스는 필요합니다.
+
+기본 컨텍스트 예산은 8192 토큰이며 출력에 1024 토큰을 예약합니다.
+`USIX_CONTEXT_TOKENS`, `USIX_OUTPUT_TOKENS`로 조절할 수 있습니다.
+대화와 도구 스키마의 크기를 추정하고 여유 공간을 둡니다. 예산이 부족하면 완료된
+이전 대화를 지우고 큰 도구 결과를 줄이며 생략 표시를 남깁니다. 최신 요청과 도구
+인자, 호출·결과 쌍은 유지합니다. 그래도 초과하면 오류를 반환합니다.
+모델의 정확한 토크나이저가 아니라 보수적인 추정치를 사용합니다.
 
 ## 공통 도구와 승인
 
@@ -107,6 +118,7 @@ usix-code task --help
 usix-code worker --once
 ```
 
+승인 화면에는 전체 인자와 실제 파일 경로를 표시하고 제어 문자를 이스케이프합니다.
 `-c` 모드에서는 변경 작업을 거부합니다. 백그라운드 작업은 승인이 필요하면 멈추며
 `usix-code task run ID`로 확인하고 이어서 진행할 수 있습니다.
 도구는 현재 OS 계정 권한으로 실행됩니다. 승인 절차가 파일 접근을 격리하는 샌드박스는
@@ -116,14 +128,20 @@ usix-code worker --once
 문자·메일·카카오톡 스킬은 Termux 어댑터가 추가합니다. 사용자가 수정한 스킬은 보존합니다.
 일반 대화 기록은 세션 안에서 유지되고 저장한 작업은 종료 후에도 남습니다.
 
+TUI는 `Enter`로 전송하고 `Ctrl+J`로 줄을 바꿉니다. `! 명령`은 사용자가 입력한 셸 명령을
+직접 실행합니다. `USIX_THEME=dark|light|mono`로 테마를 고를 수 있고 `NO_COLOR`로
+스타일을 끕니다. 터미널에 맞춰 트루컬러·256색·16색으로 출력합니다.
+
 ## 헥사고날 구조
 
 코어는 운영체제를 판별하거나 패키지 명령을 실행하지 않습니다.
 
-- `domain/`: 에이전트, 승인 흐름, 도구 레지스트리, 스킬 해석·선택
-- `ports.rs`: 모델의 `Llm`, 작업의 `Tool`, 실행 환경의 `Host` 계약
+- `domain/`: 에이전트, 승인 흐름, 작업 모델, 컨텍스트 예산, 도구 레지스트리, 스킬 해석·선택
+- `ports.rs`: `Llm`, `Tool`, `Host`, `TaskStore`, `Clock` 계약
+- `tasks/runner.rs`: 주입받은 저장소와 시계를 사용하는 작업 실행기
 - `adapters/host/`: Linux·Termux별 설치, 도구, 기본 스킬, 진단, 알림
-- `adapters/skills.rs`, `adapters/runtime.rs`: 파일과 프로세스 입출력
+- `adapters/skills.rs`, `adapters/task_store.rs`, `adapters/clock.rs`,
+  `adapters/workspace.rs`, `adapters/runtime.rs`: 파일, 시간, 작업 디렉터리, 프로세스 입출력
 - `bootstrap.rs`: 선택한 호스트를 이용한 설치 준비와 서버 수명 관리
 - `main.rs`: 환경에 맞는 어댑터를 선택하고 주입하는 진입점
 
@@ -139,10 +157,13 @@ Android Termux입니다. 다른 운영체제의 실행까지 검증했다는 뜻
 
 ```sh
 cargo fmt --check
+python3 tests/architecture.py
 cargo test --locked
 cargo clippy --locked --all-targets -- -D warnings
 python3 tests/install_smoke.py
 ```
 
-CI는 Linux 테스트와 Android ARM64 컴파일 검사를 수행합니다.
-Termux 기기에서의 모델 실행과 폰 도구 검증은 별도로 필요합니다. MIT 라이선스입니다.
+CI는 Linux 테스트와 Android ARM64 컴파일·NDK 링크 검사를 수행합니다.
+Termux 기기에서는 `sh scripts/validate-termux.sh`로 검사할 수 있습니다.
+`--model /path/to/existing.gguf`를 추가하면 실제 로컬 추론과 파일 읽기를 확인합니다.
+교차 컴파일만으로 기기 실행이나 Android 권한을 검증할 수는 없습니다. MIT 라이선스입니다.

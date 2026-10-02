@@ -1,15 +1,26 @@
-use super::store::{now, Status, Store, Task};
 use crate::domain::agent::{Agent, Turn};
 use crate::domain::registry::Registry;
 use crate::domain::skills::Skill;
-use crate::ports::Llm;
+use crate::domain::tasks::{Status, Task};
+use crate::ports::{Clock, Llm, TaskStore};
 use anyhow::{ensure, Result};
 
 pub type Approval<'a> = Option<&'a mut dyn FnMut(&str) -> Result<bool>>;
 
+pub struct Persistence<'a> {
+    store: &'a dyn TaskStore,
+    clock: &'a dyn Clock,
+}
+
+impl<'a> Persistence<'a> {
+    pub fn new(store: &'a dyn TaskStore, clock: &'a dyn Clock) -> Self {
+        Self { store, clock }
+    }
+}
+
 /// The caller holds the execution lock. No approval decision is stored for reuse.
 pub fn run(
-    store: &Store,
+    persistence: Persistence<'_>,
     id: u64,
     llm: &dyn Llm,
     registry: &Registry,
@@ -17,6 +28,7 @@ pub fn run(
     mut approval: Approval<'_>,
     prepare: &mut dyn FnMut() -> Result<()>,
 ) -> Result<Task> {
+    let Persistence { store, clock } = persistence;
     let mut task = store.get(id)?;
     ensure!(
         matches!(
@@ -40,7 +52,7 @@ pub fn run(
     task.error = None;
     task.approval = None;
     task.checkpoint = Some(agent.checkpoint());
-    store.save(&mut task)?;
+    store.save(&mut task, clock.now())?;
 
     let result = (|| -> Result<()> {
         prepare()?;
@@ -48,16 +60,16 @@ pub fn run(
             let turn = agent.advance_step(&mut |_| {})?;
             task.checkpoint = Some(agent.checkpoint());
             match turn {
-                None => store.save(&mut task)?,
+                None => store.save(&mut task, clock.now())?,
                 Some(Turn::Answer(answer)) => {
-                    task.finish(answer, now())?;
-                    store.save(&mut task)?;
+                    task.finish(answer, clock.now())?;
+                    store.save(&mut task, clock.now())?;
                     return Ok(());
                 }
                 Some(Turn::NeedApproval { desc }) => {
                     task.status = Status::AwaitingApproval;
                     task.approval = Some(desc.clone());
-                    store.save(&mut task)?;
+                    store.save(&mut task, clock.now())?;
                     let Some(decide) = approval.as_mut() else {
                         return Ok(());
                     };
@@ -67,19 +79,19 @@ pub fn run(
                         task.next_run_at = None;
                         task.approval = None;
                         task.checkpoint = None;
-                        store.save(&mut task)?;
+                        store.save(&mut task, clock.now())?;
                         return Ok(());
                     }
                     // Save before executing. A crash after this point requires inspection,
                     // because the external action and the local checkpoint cannot be atomic.
                     task.status = Status::Running;
                     task.action_in_flight = true;
-                    store.save(&mut task)?;
+                    store.save(&mut task, clock.now())?;
                     agent.approve(true)?;
                     task.action_in_flight = false;
                     task.approval = None;
                     task.checkpoint = Some(agent.checkpoint());
-                    store.save(&mut task)?;
+                    store.save(&mut task, clock.now())?;
                 }
             }
         }
@@ -94,7 +106,7 @@ pub fn run(
         };
         task.error = Some(format!("{error:#}"));
         task.checkpoint = Some(agent.checkpoint());
-        let _ = store.save(&mut task);
+        let _ = store.save(&mut task, clock.now());
         return Err(error);
     }
     Ok(task)
@@ -103,8 +115,8 @@ pub fn run(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::adapters::task_store::tests::Fixture;
     use crate::ports::{ApprovalClass, Tool};
-    use crate::tasks::store::tests::Fixture;
     use anyhow::{anyhow, bail};
     use serde_json::{json, Value};
     use std::collections::VecDeque;
@@ -112,6 +124,16 @@ mod tests {
         atomic::{AtomicUsize, Ordering},
         Arc, Mutex,
     };
+
+    struct FixedClock(u64);
+
+    impl Clock for FixedClock {
+        fn now(&self) -> u64 {
+            self.0
+        }
+    }
+
+    static TEST_CLOCK: FixedClock = FixedClock(1_000);
 
     struct Scripted {
         replies: Mutex<VecDeque<Value>>,
@@ -206,11 +228,11 @@ mod tests {
         let fixture = Fixture::new();
         let store = &fixture.store;
         let _execution = store.execution_lock().unwrap();
-        let task = store.create("read then send", 0, None, 100).unwrap();
+        let task = fixture.create("read then send", 0, None, 100);
         let llm = Scripted::new(vec![call(&["read_phone"]), call(&["send"]), answer()]);
         let (registry, reads, writes) = registry(false);
         let paused = run(
-            store,
+            Persistence::new(store, &TEST_CLOCK),
             task.id,
             &llm,
             &registry,
@@ -226,7 +248,7 @@ mod tests {
         assert!(store.get(task.id).unwrap().checkpoint.is_some());
         let mut approvals = Vec::new();
         let completed = run(
-            store,
+            Persistence::new(store, &TEST_CLOCK),
             task.id,
             &llm,
             &registry,
@@ -253,14 +275,35 @@ mod tests {
     }
 
     #[test]
+    fn runner_uses_injected_clock_for_exact_finish_and_save_times() {
+        let fixture = Fixture::new();
+        let _execution = fixture.store.execution_lock().unwrap();
+        let task = fixture.create("answer", 0, None, 100);
+        let clock = FixedClock(4_242);
+        let completed = run(
+            Persistence::new(&fixture.store, &clock),
+            task.id,
+            &Scripted::new(vec![answer()]),
+            &Registry::new(Vec::new()),
+            Vec::new(),
+            None,
+            &mut || Ok(()),
+        )
+        .unwrap();
+        assert_eq!(completed.last_finished_at, Some(4_242));
+        assert_eq!(completed.updated_at, 4_242);
+        assert_eq!(completed.next_run_at, None);
+    }
+
+    #[test]
     fn declining_approval_cancels_siblings_without_model_recall() {
         let fixture = Fixture::new();
         let _execution = fixture.store.execution_lock().unwrap();
-        let task = fixture.store.create("send twice", 0, None, 100).unwrap();
+        let task = fixture.create("send twice", 0, None, 100);
         let llm = Scripted::new(vec![call(&["send", "send"]), answer()]);
         let (registry, _, writes) = registry(false);
         let cancelled = run(
-            &fixture.store,
+            Persistence::new(&fixture.store, &TEST_CLOCK),
             task.id,
             &llm,
             &registry,
@@ -278,15 +321,12 @@ mod tests {
     fn approval_is_per_action_and_never_carries_into_repeated_runs() {
         let fixture = Fixture::new();
         let _execution = fixture.store.execution_lock().unwrap();
-        let task = fixture
-            .store
-            .create("send twice", 0, Some(60), 100)
-            .unwrap();
+        let task = fixture.create("send twice", 0, Some(60), 100);
         let llm = Scripted::new(vec![call(&["send", "send"]), answer(), call(&["send"])]);
         let (registry, _, writes) = registry(false);
         let mut approvals = 0;
         let completed = run(
-            &fixture.store,
+            Persistence::new(&fixture.store, &TEST_CLOCK),
             task.id,
             &llm,
             &registry,
@@ -302,7 +342,7 @@ mod tests {
         assert_eq!(completed.status, Status::Scheduled);
         assert!(completed.next_run_at.unwrap() >= completed.last_finished_at.unwrap() + 60);
         let paused = run(
-            &fixture.store,
+            Persistence::new(&fixture.store, &TEST_CLOCK),
             task.id,
             &llm,
             &registry,
@@ -319,12 +359,12 @@ mod tests {
     fn crash_after_side_effect_cannot_replay_approved_action() {
         let fixture = Fixture::new();
         let _execution = fixture.store.execution_lock().unwrap();
-        let task = fixture.store.create("send", 0, None, 100).unwrap();
+        let task = fixture.create("send", 0, None, 100);
         let llm = Scripted::new(vec![call(&["send"])]);
         let (registry, _, writes) = registry(true);
         let crash = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             run(
-                &fixture.store,
+                Persistence::new(&fixture.store, &TEST_CLOCK),
                 task.id,
                 &llm,
                 &registry,
@@ -336,13 +376,13 @@ mod tests {
         }));
         assert!(crash.is_err());
         assert!(fixture.store.get(task.id).unwrap().action_in_flight);
-        fixture.store.recover().unwrap();
+        fixture.store.recover(TEST_CLOCK.now()).unwrap();
         assert_eq!(
             fixture.store.get(task.id).unwrap().status,
             Status::Interrupted
         );
         assert!(run(
-            &fixture.store,
+            Persistence::new(&fixture.store, &TEST_CLOCK),
             task.id,
             &llm,
             &registry,
@@ -358,11 +398,11 @@ mod tests {
     fn model_failure_retains_successful_reads_for_resume() {
         let fixture = Fixture::new();
         let _execution = fixture.store.execution_lock().unwrap();
-        let task = fixture.store.create("read", 0, None, 100).unwrap();
+        let task = fixture.create("read", 0, None, 100);
         let llm = Scripted::new(vec![call(&["read_phone"])]);
         let (registry, reads, _) = registry(false);
         assert!(run(
-            &fixture.store,
+            Persistence::new(&fixture.store, &TEST_CLOCK),
             task.id,
             &llm,
             &registry,
@@ -373,7 +413,7 @@ mod tests {
         .is_err());
         assert_eq!(fixture.store.get(task.id).unwrap().status, Status::Failed);
         let resumed = run(
-            &fixture.store,
+            Persistence::new(&fixture.store, &TEST_CLOCK),
             task.id,
             &Scripted::new(vec![answer()]),
             &registry,
@@ -390,17 +430,17 @@ mod tests {
     fn cancellation_during_approval_wins_before_side_effect() {
         let fixture = Fixture::new();
         let _execution = fixture.store.execution_lock().unwrap();
-        let task = fixture.store.create("send", 0, None, 100).unwrap();
+        let task = fixture.create("send", 0, None, 100);
         let llm = Scripted::new(vec![call(&["send"])]);
         let (registry, _, writes) = registry(false);
         let result = run(
-            &fixture.store,
+            Persistence::new(&fixture.store, &TEST_CLOCK),
             task.id,
             &llm,
             &registry,
             Vec::new(),
             Some(&mut |_| {
-                fixture.store.cancel(task.id)?;
+                fixture.store.cancel(task.id, TEST_CLOCK.now())?;
                 Ok(true)
             }),
             &mut || Ok(()),
@@ -417,11 +457,11 @@ mod tests {
     fn unavailable_backend_and_step_exhaustion_are_failures() {
         let fixture = Fixture::new();
         let _execution = fixture.store.execution_lock().unwrap();
-        let task = fixture.store.create("read", 0, None, 100).unwrap();
+        let task = fixture.create("read", 0, None, 100);
         let llm = Scripted::new(vec![answer()]);
         let (registry, _, _) = registry(false);
         assert!(run(
-            &fixture.store,
+            Persistence::new(&fixture.store, &TEST_CLOCK),
             task.id,
             &llm,
             &registry,
@@ -434,7 +474,7 @@ mod tests {
         assert_eq!(llm.requests.lock().unwrap().len(), 0);
         let llm = Scripted::new((0..20).map(|_| call(&["read_phone"])).collect());
         assert!(run(
-            &fixture.store,
+            Persistence::new(&fixture.store, &TEST_CLOCK),
             task.id,
             &llm,
             &registry,
@@ -462,9 +502,9 @@ mod tests {
                 json!({"role": "assistant", "content": ""}),
             ],
         ] {
-            let task = fixture.store.create("check", 0, None, 100).unwrap();
+            let task = fixture.create("check", 0, None, 100);
             assert!(run(
-                &fixture.store,
+                Persistence::new(&fixture.store, &TEST_CLOCK),
                 task.id,
                 &Scripted::new(replies),
                 &registry,
@@ -475,7 +515,7 @@ mod tests {
             .is_err());
             let llm = Scripted::new(vec![answer()]);
             let resumed = run(
-                &fixture.store,
+                Persistence::new(&fixture.store, &TEST_CLOCK),
                 task.id,
                 &llm,
                 &registry,
@@ -519,13 +559,10 @@ mod tests {
                 crash: false,
             }),
         ]);
-        let task = fixture
-            .store
-            .create("use the phone screen", 0, None, 100)
-            .unwrap();
+        let task = fixture.create("use the phone screen", 0, None, 100);
         let first = Scripted::new(vec![call(&["ui_action", "send"])]);
         let paused = run(
-            &fixture.store,
+            Persistence::new(&fixture.store, &TEST_CLOCK),
             task.id,
             &first,
             &registry,
@@ -538,7 +575,7 @@ mod tests {
         let resumed = Scripted::new(vec![call(&["ui_action"]), answer()]);
         let mut approvals = 0;
         let completed = run(
-            &fixture.store,
+            Persistence::new(&fixture.store, &TEST_CLOCK),
             task.id,
             &resumed,
             &registry,

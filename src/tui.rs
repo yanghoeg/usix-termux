@@ -4,6 +4,7 @@
 // 벌어지지 않는다. 입력 박스·wrap·커서는 usix draw.rs 이식. 편집기는 editor.rs.
 mod editor;
 mod markdown;
+mod theme;
 
 use crate::domain::agent::{Agent, Turn};
 use crate::ports::Tool;
@@ -25,18 +26,16 @@ use std::time::{Duration, Instant};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 // usix 팔레트.
-const MUTED: Color = Color::Rgb(175, 175, 175);
-const ACCENT: Color = Color::Rgb(215, 175, 255);
-const CODE: Color = Color::Rgb(135, 215, 215);
-const YELLOW: Color = Color::Indexed(220);
-const PINK: Color = Color::Indexed(218);
-const BROWN: Color = Color::Indexed(172);
-const RED: Color = Color::Indexed(203);
+use theme::{ACCENT, CODE, MUTED};
+const YELLOW: Color = Color::Rgb(255, 215, 0);
+const PINK: Color = Color::Rgb(255, 175, 215);
+const BROWN: Color = Color::Rgb(215, 135, 0);
+const RED: Color = theme::BASH;
 
-const PROMPT: &str = "> ";
+const PROMPT: &str = "❯ ";
 const PROMPT_W: usize = 2;
-/// 입력 박스가 먹는 가로 크롬 = 좌우 테두리(2) + 좌우 여백(2).
-const BOX_CHROME: u16 = 4;
+/// Horizontal space reserved for the prompt.
+const BOX_CHROME: u16 = 2;
 /// 하단 인라인 뷰포트 높이(테두리 2 + 입력 최대 3 + footer 1).
 const VIEWPORT_H: u16 = 6;
 const MAX_INPUT_ROWS: u16 = 3;
@@ -58,7 +57,8 @@ impl Drop for TerminalGuard {
 }
 
 pub fn run(mut agent: Agent, model_label: String) -> Result<()> {
-    print_banner(&model_label);
+    theme::init()?;
+    print_banner(&model_label, agent.skills_count());
     let mut ed = Editor::new();
     loop {
         match read_line(&mut ed, &model_label)? {
@@ -90,7 +90,10 @@ fn read_line(ed: &mut Editor, model: &str) -> Result<Read> {
     let _ = execute!(io::stdout(), EnableBracketedPaste);
 
     let out = loop {
-        term.draw(|f| draw_box(f, &ed.buffer, ed.cursor, model, true))?;
+        term.draw(|f| {
+            draw_box(f, &ed.buffer, ed.cursor, model, true);
+            theme::active().resolve_buffer(f.buffer_mut());
+        })?;
         match event::read()? {
             Event::Paste(t) => ed.insert_str(&t),
             Event::Key(k) if k.kind != KeyEventKind::Release => {
@@ -99,7 +102,10 @@ fn read_line(ed: &mut Editor, model: &str) -> Result<Read> {
                     Action::Exit => break Read::Exit,
                     Action::Submit(text) => {
                         // 커밋 프레임: 제출한 텍스트를 footer 없이 한 번 더 그려 스크롤백에 남긴다.
-                        let _ = term.draw(|f| draw_box(f, &text, text.len(), model, false));
+                        let _ = term.draw(|f| {
+                            draw_box(f, &text, text.len(), model, false);
+                            theme::active().resolve_buffer(f.buffer_mut());
+                        });
                         break Read::Submit(text);
                     }
                 }
@@ -149,8 +155,6 @@ fn clear_line() {
     let _ = io::stdout().flush();
 }
 
-const MAX_APPROVAL_PROMPT_CHARS: usize = 1200;
-
 fn is_terminal_control(c: char) -> bool {
     c.is_control()
         || matches!(
@@ -174,14 +178,20 @@ pub(crate) fn sanitize_terminal_text(text: &str) -> String {
         .collect()
 }
 
-fn truncate_display(text: &str, limit: usize) -> String {
-    let mut chars = text.chars();
-    let out: String = chars.by_ref().take(limit).collect();
-    if chars.next().is_some() {
-        format!("{out}…")
-    } else {
-        out
-    }
+pub(crate) fn approval_text(prompt: &str) -> String {
+    // Escaping preserves the complete original arguments, including controls.
+    // No truncation: approval always covers the full action being executed.
+    serde_json::to_string(prompt)
+        .expect("string serialization cannot fail")
+        .chars()
+        .map(|c| {
+            if is_terminal_control(c) {
+                format!("\\u{:04x}", c as u32)
+            } else {
+                c.to_string()
+            }
+        })
+        .collect()
 }
 
 /// 모델 진행을 워커 스레드로 돌리고, content 델타는 채널로 받아 메인에서 출력한다.
@@ -211,10 +221,11 @@ fn run_turn(agent: &mut Agent, sp: &mut StreamPrinter) -> Result<Turn> {
                 }
                 Err(mpsc::RecvTimeoutError::Timeout) => {
                     if !sp.any {
-                        print!(
-                            "\r\x1b[K\x1b[38;2;175;175;175mThinking… ({}s)\x1b[0m",
-                            start.elapsed().as_secs()
-                        );
+                        let line = Line::from(Span::styled(
+                            format!("Thinking… ({}s)", start.elapsed().as_secs()),
+                            Style::default().fg(MUTED),
+                        ));
+                        print!("\r\x1b[K{}", line_to_ansi(&line));
                         let _ = io::stdout().flush();
                     }
                 }
@@ -270,8 +281,11 @@ impl StreamPrinter {
 }
 
 fn read_yes_no(prompt: &str) -> bool {
-    let prompt = truncate_display(&sanitize_terminal_text(prompt), MAX_APPROVAL_PROMPT_CHARS);
-    eprint!("\n\x1b[33m{prompt}  [y/N] \x1b[0m");
+    let line = Line::from(Span::styled(
+        format!("{}  [y/N]", approval_text(prompt)),
+        Style::default().fg(theme::WARN),
+    ));
+    eprint!("\n{} ", line_to_ansi(&line));
     let _ = io::stderr().flush();
     let mut s = String::new();
     let _ = io::stdin().read_line(&mut s);
@@ -292,8 +306,8 @@ fn run_shell(cmd: &str) {
 
 // ── 대화록 출력 (일반 stdout — 단말 고유 폭) ───────────────────────────────
 
-fn print_banner(model: &str) {
-    for line in banner_lines(model) {
+fn print_banner(model: &str, skills: usize) {
+    for line in banner_lines(model, skills) {
         println!("{}", line_to_ansi(&line));
     }
     println!();
@@ -309,16 +323,30 @@ fn print_assistant(md: &str) {
 fn print_system(text: &str) {
     println!();
     for l in text.lines() {
-        println!("\x1b[38;2;175;175;175m{}\x1b[0m", sanitize_terminal_text(l));
+        println!(
+            "{}",
+            line_to_ansi(&Line::from(Span::styled(
+                l.to_string(),
+                Style::default().fg(MUTED)
+            )))
+        );
     }
 }
 
 /// ratatui Line → ANSI 문자열. 뷰포트 밖으로 직접 찍을 때 색·강조를 보존한다.
 fn line_to_ansi(line: &Line) -> String {
+    line_to_ansi_with(line, theme::active())
+}
+
+fn line_to_ansi_with(line: &Line, settings: theme::Settings) -> String {
     let mut s = String::new();
     for span in &line.spans {
+        if settings.level == theme::Level::None {
+            s.push_str(&sanitize_terminal_text(&span.content));
+            continue;
+        }
         if let Some(c) = span.style.fg {
-            s.push_str(&ansi_fg(c));
+            s.push_str(&ansi_fg(settings.resolve(c)));
         }
         let m = span.style.add_modifier;
         if m.contains(Modifier::BOLD) {
@@ -351,6 +379,7 @@ fn ansi_fg(c: Color) -> String {
         Color::Magenta => "\x1b[35m".into(),
         Color::Cyan => "\x1b[36m".into(),
         Color::White | Color::Gray => "\x1b[37m".into(),
+        Color::LightBlue => "\x1b[94m".into(),
         _ => "\x1b[39m".into(),
     }
 }
@@ -361,9 +390,9 @@ fn ansi_fg(c: Color) -> String {
 fn draw_box(f: &mut Frame, buffer: &str, cursor: usize, model: &str, editing: bool) {
     let area = f.area();
     let bash = buffer.starts_with('!');
-    let border = Style::default().fg(if bash { RED } else { MUTED });
+    let border = Style::default().fg(if bash { RED } else { theme::BORDER });
     let inner_w = area.width.saturating_sub(BOX_CHROME).max(1);
-    let text_style = Style::default().fg(Color::White);
+    let text_style = Style::default().fg(Color::Reset);
     let accent = Style::default().fg(ACCENT).add_modifier(Modifier::BOLD);
 
     let buf_lines: Vec<&str> = buffer.split('\n').collect();
@@ -406,11 +435,8 @@ fn draw_box(f: &mut Frame, buffer: &str, cursor: usize, model: &str, editing: bo
     let rows = Layout::vertical(constraints).split(area);
     let (top, body_area, bottom) = (rows[0], rows[1], rows[2]);
 
-    f.render_widget(Paragraph::new(box_rule(area.width, "╭", "╮", border)), top);
-    f.render_widget(
-        Paragraph::new(box_rule(area.width, "╰", "╯", border)),
-        bottom,
-    );
+    f.render_widget(Paragraph::new(box_rule(area.width, border)), top);
+    f.render_widget(Paragraph::new(box_rule(area.width, border)), bottom);
 
     let (vrow, col) = cursor_line_col(buffer, cursor, area.width);
     let scroll = vrow.saturating_sub(input_h.saturating_sub(1));
@@ -421,7 +447,7 @@ fn draw_box(f: &mut Frame, buffer: &str, cursor: usize, model: &str, editing: bo
     f.render_widget(Paragraph::new(framed).scroll((scroll, 0)), body_area);
 
     if editing {
-        let x_off = (BOX_CHROME / 2) + if vrow == 0 { PROMPT_W as u16 } else { 0 };
+        let x_off = BOX_CHROME + if vrow == 0 { PROMPT_W as u16 } else { 0 };
         f.set_cursor_position((body_area.x + x_off + col, body_area.y + (vrow - scroll)));
 
         let (left, lstyle) = if bash {
@@ -541,21 +567,23 @@ fn frame_row<'a>(inner: Line<'a>, inner_w: usize, border: Style) -> Line<'a> {
         .map(|s| UnicodeWidthStr::width(s.content.as_ref()))
         .sum();
     let mut spans = Vec::with_capacity(inner.spans.len() + 2);
-    spans.push(Span::styled("│ ", border));
+    spans.push(Span::styled("  ", border));
     spans.extend(inner.spans);
     spans.push(Span::styled(
-        format!("{} │", " ".repeat(inner_w.saturating_sub(used))),
+        " ".repeat(inner_w.saturating_sub(used)),
         border,
     ));
     Line::from(spans)
 }
 
-fn box_rule(width: u16, left: &str, right: &str, style: Style) -> Line<'static> {
-    let fill = "─".repeat((width as usize).saturating_sub(2));
-    Line::from(Span::styled(format!("{left}{fill}{right}"), style))
+fn box_rule(width: u16, style: Style) -> Line<'static> {
+    Line::from(Span::styled("─".repeat(width as usize), style))
 }
 
 fn clamp_cells(s: &str, budget: usize) -> String {
+    if budget == 0 {
+        return String::new();
+    }
     if UnicodeWidthStr::width(s) <= budget {
         return s.to_string();
     }
@@ -615,7 +643,7 @@ fn footer_line(
 fn mascot_rows() -> Vec<Vec<Span<'static>>> {
     // usix mascot.rs 이식 — 통통한 병아리(데스크톱 아이콘의 터미널 버전). 열린 옆구리
     // `/  \`·`|  |` 와 배·날개 행 `(           )` 로 6줄 축약본보다 몸통을 살렸다.
-    let white = Style::default().fg(Color::White);
+    let white = Style::default().fg(Color::Reset);
     let white_b = white.add_modifier(Modifier::BOLD);
     let pink = Style::default().fg(PINK);
     let beak = Style::default().fg(YELLOW).add_modifier(Modifier::BOLD);
@@ -652,7 +680,7 @@ const SIDE_MIN_COPY_W: usize = 32;
 
 /// usix banner.rs 이식 — 한 줄 dim 컨텍스트 + 폭에 따른 좌우/상하 반응형 배치.
 /// copy(로고·컨텍스트)는 상단 정렬해 병아리 첫 두 행에 나란히 놓고, 남는 행은 마스코트만.
-fn banner_lines(model_label: &str) -> Vec<Line<'static>> {
+fn banner_lines(model_label: &str, skills: usize) -> Vec<Line<'static>> {
     let cwd = std::env::current_dir()
         .ok()
         .and_then(|p| p.file_name().map(|s| s.to_string_lossy().into_owned()))
@@ -661,7 +689,21 @@ fn banner_lines(model_label: &str) -> Vec<Line<'static>> {
 
     let cols = crossterm::terminal::size()
         .map_or(80, |(c, _)| c as usize)
-        .max(1);
+        .clamp(1, 96);
+    banner_at(&cwd, &branch, model_label, skills, cols)
+}
+
+fn banner_at(
+    cwd: &str,
+    branch: &str,
+    model_label: &str,
+    skills: usize,
+    cols: usize,
+) -> Vec<Line<'static>> {
+    let cols = cols.min(96);
+    if cols == 0 {
+        return Vec::new();
+    }
     let gap = UnicodeWidthStr::width(MASCOT_GAP);
     let show_mascot = cols >= ART_W;
     let side_by_side = show_mascot && cols >= ART_W + gap + SIDE_MIN_COPY_W;
@@ -671,7 +713,7 @@ fn banner_lines(model_label: &str) -> Vec<Line<'static>> {
         cols
     };
 
-    let copy = copy_lines(&cwd, &branch, model_label, copy_width);
+    let copy = copy_lines(cwd, branch, model_label, skills, copy_width);
     if !show_mascot {
         return copy;
     }
@@ -708,39 +750,50 @@ fn mascot_line(row: &[Span<'static>]) -> Line<'static> {
 }
 
 /// 로고 + 한 줄 컨텍스트를 copy_width 안에 맞춰 반환.
-fn copy_lines(cwd: &str, branch: &str, model: &str, width: usize) -> Vec<Line<'static>> {
-    const LOGO: &str = "✻ usix-code v0.0.1";
-    let logo = if UnicodeWidthStr::width(LOGO) <= width {
+fn copy_lines(
+    cwd: &str,
+    branch: &str,
+    model: &str,
+    skills: usize,
+    width: usize,
+) -> Vec<Line<'static>> {
+    let version = env!("CARGO_PKG_VERSION");
+    let logo_text = format!("✻ usix-code {version}");
+    let logo = if UnicodeWidthStr::width(logo_text.as_str()) <= width {
         Line::from(vec![
             Span::styled("✻ ", Style::default().fg(ACCENT)),
             Span::styled(
                 "usix-code",
-                Style::default()
-                    .fg(Color::White)
-                    .add_modifier(Modifier::BOLD),
+                Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
             ),
-            Span::styled(" v0.0.1", Style::default().fg(MUTED)),
+            Span::styled(format!(" {version}"), Style::default().fg(Color::Reset)),
         ])
     } else {
         Line::from(Span::styled(
-            clamp_cells(LOGO, width),
+            clamp_cells(&logo_text, width),
             Style::default().fg(ACCENT),
         ))
     };
-    let ctx = context_line(cwd, branch, model, width);
+    let ctx = context_line(cwd, branch, &skills.to_string(), width);
     vec![
         logo,
+        Line::from(vec![
+            Span::styled(clamp_cells("model ", width), Style::default().fg(MUTED)),
+            Span::styled(
+                clamp_cells(model, width.saturating_sub(6)),
+                Style::default().fg(ACCENT),
+            ),
+        ]),
         Line::from(Span::styled(ctx, Style::default().fg(MUTED))),
     ]
 }
 
-/// `cwd X · branch Y · model Z` 한 줄 — 좁을수록 라벨을 점진 축약하고 값은 tail 절단.
-/// model 이 termux 핵심 값이라 값 예산을 가장 크게 준다(나머지를 cwd·branch 로 3:2).
-fn context_line(cwd: &str, branch: &str, model: &str, max_width: usize) -> String {
+/// Shorten context labels and values to fit the available terminal cells.
+fn context_line(cwd: &str, branch: &str, skills: &str, max_width: usize) -> String {
     let layouts = [
-        ("cwd ", " · branch ", " · model "),
-        ("cwd ", " · br ", " · md "),
-        ("c ", " · b ", " · m "),
+        ("cwd ", " · branch ", " · skills "),
+        ("cwd ", " · br ", " · sk "),
+        ("c ", " · b ", " · s "),
     ];
     let label_w = |(a, b, c): &(&str, &str, &str)| {
         UnicodeWidthStr::width(*a) + UnicodeWidthStr::width(*b) + UnicodeWidthStr::width(*c)
@@ -750,11 +803,11 @@ fn context_line(cwd: &str, branch: &str, model: &str, max_width: usize) -> Strin
         .find(|l| label_w(l) + 3 <= max_width)
         .copied()
         .unwrap_or(layouts[2]);
-    let (l_cwd, l_branch, l_model) = labels;
+    let (l_cwd, l_branch, l_skills) = labels;
 
     let values = max_width.saturating_sub(label_w(&labels));
-    let model_w = (values * 2 / 5).max(usize::from(values > 0));
-    let rest = values.saturating_sub(model_w);
+    let skills_w = UnicodeWidthStr::width(skills).min(values);
+    let rest = values.saturating_sub(skills_w);
     let cwd_w = (rest * 3 / 5).max(usize::from(rest > 0));
     let branch_w = rest.saturating_sub(cwd_w);
 
@@ -766,10 +819,10 @@ fn context_line(cwd: &str, branch: &str, model: &str, max_width: usize) -> Strin
         }
     };
     let line = format!(
-        "{l_cwd}{}{l_branch}{}{l_model}{}",
+        "{l_cwd}{}{l_branch}{}{l_skills}{}",
         fit(cwd, cwd_w),
         fit(branch, branch_w),
-        fit(model, model_w),
+        fit(skills, skills_w),
     );
     clamp_cells(&line, max_width)
 }
@@ -804,8 +857,66 @@ mod tests {
     }
 
     #[test]
-    fn display_truncation_is_character_safe() {
-        assert_eq!(truncate_display("가나다", 2), "가나…");
-        assert_eq!(truncate_display("가나", 2), "가나");
+    fn approval_preserves_long_arguments_and_escapes_terminal_controls() {
+        let original = format!("{}\n\u{1b}[31m\u{202e} END", "가나다".repeat(2000));
+        let displayed = approval_text(&original);
+        assert!(!displayed.contains('\u{1b}'));
+        assert_eq!(
+            serde_json::from_str::<String>(&displayed).unwrap(),
+            original
+        );
+        assert!(displayed.ends_with(" END\""));
+    }
+
+    #[test]
+    fn banner_preserves_chick_shape_and_fits_mobile_widths() {
+        let expected = [
+            "      ,;;,",
+            "   .-'```'-.",
+            "  /  o   o  \\",
+            " |  .  v  .  |",
+            " (           )",
+            "   '-.___.-'",
+            "     w   w",
+        ];
+        for (index, (row, expected)) in mascot_rows().iter().zip(expected).enumerate() {
+            let plain: String = row.iter().map(|s| s.content.as_ref()).collect();
+            assert_eq!(plain, expected);
+            assert_eq!(
+                row[0].style.fg,
+                Some(if index == 6 { BROWN } else { Color::Reset })
+            );
+        }
+        let settings = theme::Settings {
+            mode: theme::Mode::Dark,
+            level: theme::Level::None,
+        };
+        for width in [0, 1, 15, 16, 32, 49, 50, 80, 96, 120] {
+            for line in banner_at("프로젝트", "branch", "Qwen3.5", 4, width) {
+                let plain = line_to_ansi_with(&line, settings);
+                assert!(!plain.contains('\u{1b}'));
+                assert!(
+                    UnicodeWidthStr::width(plain.as_str()) <= width.min(96),
+                    "{width}: {plain}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn composer_has_full_width_rules_and_no_vertical_frame() {
+        let backend = ratatui::backend::TestBackend::new(40, 6);
+        let mut terminal = ratatui::Terminal::new(backend).unwrap();
+        terminal
+            .draw(|frame| draw_box(frame, "hello", 5, "local", true))
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        assert_eq!(buffer[(0, 0)].symbol(), "─");
+        assert_eq!(buffer[(39, 0)].symbol(), "─");
+        assert_eq!(buffer[(2, 1)].symbol(), "❯");
+        assert!(buffer
+            .content
+            .iter()
+            .all(|cell| !matches!(cell.symbol(), "│" | "╭" | "╮" | "╰" | "╯")));
     }
 }

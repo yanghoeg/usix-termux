@@ -1,7 +1,10 @@
 // PORTS — contracts implemented by external adapters.
 use anyhow::Result;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+
+use crate::domain::tasks::Task;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Backend {
@@ -18,6 +21,7 @@ impl Backend {
     }
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct LaunchSpec {
     pub program: PathBuf,
     pub args: Vec<String>,
@@ -43,7 +47,7 @@ pub struct BundledSkill {
 /// Host services are injected at the application boundary. The agent never detects an OS.
 pub trait Host: Send + Sync {
     fn name(&self) -> &'static str;
-    fn tools(&self) -> Vec<Box<dyn Tool>>;
+    fn tools(&self, workspace: &Path) -> Vec<Box<dyn Tool>>;
     fn bundled_skills(&self) -> &'static [BundledSkill];
     fn ensure_backend(&self, backend: Backend) -> Result<()>;
     fn backend_launch(&self, backend: Backend) -> LaunchSpec;
@@ -51,15 +55,28 @@ pub trait Host: Send + Sync {
     fn pair(&self, _token: Option<&str>) -> Result<()> {
         anyhow::bail!("companion pairing is unavailable on {}", self.name())
     }
-    fn notify(&self, content: &str) {
-        eprintln!("{content}");
-    }
+    fn notify(&self, content: &str);
     fn reset_tools(&self) {}
+}
+
+/// Time is injected so task orchestration remains deterministic and I/O-free.
+pub trait Clock: Send + Sync {
+    fn now(&self) -> u64;
+}
+
+/// Minimal persistence contract needed by the task runner.
+pub trait TaskStore: Send + Sync {
+    fn get(&self, id: u64) -> Result<Task>;
+    fn save(&self, task: &mut Task, at: u64) -> Result<()>;
 }
 
 /// LLM 게이트웨이 계약 (ollama 등 구현체가 채움).
 /// Send + Sync: TUI가 모델 호출(블로킹)을 워커 스레드로 돌려 경과 시간을 표시한다.
 pub trait Llm: Send + Sync {
+    fn budget(&self) -> crate::domain::context::Budget {
+        crate::domain::context::Budget::default()
+    }
+
     /// messages + tools 스키마를 보내고 assistant 메시지(content 또는 tool_calls)를 받는다.
     fn chat(&self, messages: &[Value], tools: &[Value]) -> Result<Value>;
 
@@ -86,6 +103,10 @@ pub trait Tool: Send + Sync {
     /// Screen-dependent calls must be planned again after a task leaves the process.
     fn requires_fresh_screen(&self) -> bool {
         false
+    }
+    /// Arguments shown to a human when approval is requested.
+    fn approval_arguments(&self, args: &Value) -> Value {
+        args.clone()
     }
     /// 모델이 채운 인자로 실행하고 사람이 읽을 결과 문자열을 돌려준다.
     fn run(&self, args: &Value) -> Result<String>;

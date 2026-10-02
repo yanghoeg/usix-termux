@@ -1,14 +1,16 @@
 pub mod runner;
-pub mod store;
 
+use crate::adapters::clock::SystemClock;
+use crate::adapters::task_store::FileStore;
 use crate::bootstrap::BackendServeGuard;
 use crate::domain::registry::Registry;
-use crate::ports::Host;
+use crate::domain::tasks::{duration, Status, Task};
+use crate::ports::{Clock, Host};
 use anyhow::{bail, ensure, Context, Result};
 use serde_json::json;
 use std::io::{self, IsTerminal, Write};
+use std::path::PathBuf;
 use std::time::Duration;
-use store::{duration, now, Status, Store, Task};
 
 pub const HELP: &str = "Tasks:
   usix-code task add \"prompt\"                         queue a task now
@@ -19,6 +21,7 @@ pub const HELP: &str = "Tasks:
   usix-code task run ID                                run/resume with approval prompts
   usix-code task cancel ID                             cancel a waiting task or schedule
   usix-code task retry ID                              queue a stopped task from the start
+  usix-code task bind ID [directory]                   bind a stopped task to a workspace
   usix-code task remove ID                             delete a stopped task and its history
   usix-code worker [--once]                            process due tasks without approvals
 
@@ -33,11 +36,12 @@ pub fn command(args: &[String], host: &dyn Host) -> Result<()> {
         println!("{HELP}");
         return Ok(());
     }
-    let store = Store::default_location()?;
+    let store = FileStore::default_location()?;
+    let clock = SystemClock;
     match args[0].as_str() {
         "add" | "schedule" => {
             let (prompt, delay, interval) = parse_create(args)?;
-            let task = store.create(&prompt, delay, interval, now())?;
+            let task = store.create(&prompt, current_workspace()?, delay, interval, clock.now())?;
             print_task(&task)?;
             eprintln!("Queued. Run `usix-code worker` to execute scheduled tasks.");
         }
@@ -51,8 +55,12 @@ pub fn command(args: &[String], host: &dyn Host) -> Result<()> {
             );
         }
         "show" => print_task(&store.get(parse_id(args)?)?)?,
-        "cancel" => print_task(&store.cancel(parse_id(args)?)?)?,
-        "retry" => print_task(&store.retry(parse_id(args)?)?)?,
+        "cancel" => print_task(&store.cancel(parse_id(args)?, clock.now())?)?,
+        "retry" => print_task(&store.retry(parse_id(args)?, clock.now())?)?,
+        "bind" => {
+            let (id, workspace) = parse_bind(args)?;
+            print_task(&store.bind(id, workspace, clock.now())?)?;
+        }
         "remove" => {
             let id = parse_id(args)?;
             store.remove(id)?;
@@ -61,13 +69,39 @@ pub fn command(args: &[String], host: &dyn Host) -> Result<()> {
         "run" => {
             let id = parse_id(args)?;
             let _execution = store.execution_lock()?;
-            store.recover()?;
-            let task = execute(&store, id, true, host)?;
+            store.recover(clock.now())?;
+            let task = execute(&store, id, true, host, &clock)?;
             print_task(&task)?;
         }
         other => bail!("unknown task command: {other}\n{HELP}"),
     }
     Ok(())
+}
+
+fn current_workspace() -> Result<PathBuf> {
+    std::env::current_dir()?
+        .canonicalize()
+        .context("resolve current workspace")
+}
+
+fn parse_bind(args: &[String]) -> Result<(u64, PathBuf)> {
+    ensure!(
+        args.len() == 2 || args.len() == 3,
+        "usage: task bind ID [directory]"
+    );
+    let id = args[1]
+        .parse::<u64>()
+        .context("task ID must be a positive integer")?;
+    ensure!(id > 0, "task ID must be a positive integer");
+    let directory = args
+        .get(2)
+        .map(PathBuf::from)
+        .unwrap_or(std::env::current_dir()?);
+    let workspace = directory
+        .canonicalize()
+        .with_context(|| format!("resolve workspace {}", directory.display()))?;
+    ensure!(workspace.is_dir(), "workspace must be a directory");
+    Ok((id, workspace))
 }
 
 fn parse_id(args: &[String]) -> Result<u64> {
@@ -127,10 +161,7 @@ fn print_task(task: &Task) -> Result<()> {
 }
 
 fn confirm(desc: &str) -> Result<bool> {
-    println!(
-        "Approval required: {}",
-        crate::tui::sanitize_terminal_text(&serde_json::to_string(desc)?)
-    );
+    println!("Approval required: {}", crate::tui::approval_text(desc));
     print!("Execute this action? [y/N] ");
     io::stdout().flush()?;
     let mut answer = String::new();
@@ -142,9 +173,28 @@ fn confirm(desc: &str) -> Result<bool> {
 }
 
 /// All execution entry points hold the same lock, including ordinary chat and -c.
-fn execute(store: &Store, id: u64, interactive: bool, host: &dyn Host) -> Result<Task> {
+fn execute(
+    store: &FileStore,
+    id: u64,
+    interactive: bool,
+    host: &dyn Host,
+    clock: &dyn Clock,
+) -> Result<Task> {
+    let mut task = store.get(id)?;
+    let workspace = match validate_workspace(&task) {
+        Ok(workspace) => workspace,
+        Err(error) => {
+            // Stop scheduled retries before any model or tool can run in a bad workspace.
+            if task.status == Status::Scheduled && !task.action_in_flight {
+                task.status = Status::Failed;
+                task.error = Some(format!("{error:#}"));
+                store.save(&mut task, clock.now())?;
+            }
+            return Err(error);
+        }
+    };
     let llm = crate::backend()?;
-    let registry = Registry::new(host.tools());
+    let registry = Registry::new(host.tools(&workspace));
     let skills = crate::adapters::skills::load(host.bundled_skills());
     host.reset_tools();
     let mut backend_guard = None;
@@ -160,7 +210,7 @@ fn execute(store: &Store, id: u64, interactive: bool, host: &dyn Host) -> Result
             None
         };
     runner::run(
-        store,
+        runner::Persistence::new(store, clock),
         id,
         llm.as_ref(),
         &registry,
@@ -168,6 +218,28 @@ fn execute(store: &Store, id: u64, interactive: bool, host: &dyn Host) -> Result
         approval,
         &mut prepare,
     )
+}
+
+fn validate_workspace(task: &Task) -> Result<PathBuf> {
+    let workspace = task.workspace.as_ref().with_context(|| {
+        format!(
+            "task {} has no workspace; run `usix-code task bind {} [directory]` before execution",
+            task.id, task.id
+        )
+    })?;
+    ensure!(
+        workspace.is_absolute(),
+        "task workspace is not absolute; bind it again"
+    );
+    let canonical = workspace
+        .canonicalize()
+        .with_context(|| format!("task workspace is unavailable: {}", workspace.display()))?;
+    ensure!(
+        canonical == *workspace,
+        "task workspace no longer resolves to its bound canonical path; inspect it and bind again"
+    );
+    ensure!(canonical.is_dir(), "task workspace is not a directory");
+    Ok(canonical)
 }
 
 pub fn worker(args: &[String], host: &dyn Host) -> Result<()> {
@@ -180,18 +252,20 @@ pub fn worker(args: &[String], host: &dyn Host) -> Result<()> {
         "usage: usix-code worker [--once]"
     );
     let once = !args.is_empty();
-    let store = Store::default_location()?;
+    let store = FileStore::default_location()?;
+    let clock = SystemClock;
     let _worker = store.worker_lock()?;
     loop {
         match store.execution_lock() {
             Ok(_execution) => {
-                store.recover()?;
+                store.recover(clock.now())?;
                 // A snapshot prevents tasks created during a run from growing this batch.
                 let due: Vec<u64> = store
                     .list()?
                     .iter()
                     .filter(|t| {
-                        t.status == Status::Scheduled && t.next_run_at.is_some_and(|at| at <= now())
+                        t.status == Status::Scheduled
+                            && t.next_run_at.is_some_and(|at| at <= clock.now())
                     })
                     .map(|t| t.id)
                     .collect();
@@ -204,7 +278,7 @@ pub fn worker(args: &[String], host: &dyn Host) -> Result<()> {
                     {
                         continue;
                     }
-                    match execute(&store, id, false, host) {
+                    match execute(&store, id, false, host, &clock) {
                         Ok(task) => {
                             print_task(&task)?;
                             notify(&task, host);

@@ -15,6 +15,9 @@ use ports::{Backend, Host, Llm};
 
 fn main() -> anyhow::Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.first().map(String::as_str) == Some("__supervise-backend") {
+        return adapters::runtime::supervise();
+    }
     let host = adapters::host::current()?;
     let host = host.as_ref();
 
@@ -26,11 +29,12 @@ fn main() -> anyhow::Result<()> {
         Some("worker") => tasks::worker(&args[1..], host)?,
         Some("-c") => one_shot(&args[1..].join(" "), host)?,
         Some("chat") | None => {
-            let store = tasks::store::Store::default_location()?;
+            let store = adapters::task_store::FileStore::default_location()?;
             let _execution = store.execution_lock()?;
             let _serve = bootstrap::BackendServeGuard::start(host)?;
             let llm = backend()?;
-            let registry = Registry::new(host.tools());
+            let workspace = std::env::current_dir()?.canonicalize()?;
+            let registry = Registry::new(host.tools(&workspace));
             let agent = Agent::new(
                 llm.as_ref(),
                 &registry,
@@ -50,10 +54,15 @@ fn main() -> anyhow::Result<()> {
 
 // LLM 백엔드 선택 — 기본 llama.cpp, USIX_BACKEND=ollama 로 전환.
 fn backend() -> anyhow::Result<Box<dyn Llm>> {
+    let budget = bootstrap::context_budget()?;
     if bootstrap::backend()? == Backend::Ollama {
-        Ok(Box::new(Ollama::new(bootstrap::ollama_model())))
+        Ok(Box::new(Ollama::new(
+            bootstrap::ollama_model(),
+            budget,
+            adapters::ollama_port()?,
+        )))
     } else {
-        Ok(Box::new(LlamaCpp::new()))
+        Ok(Box::new(LlamaCpp::new(budget, adapters::llama_port()?)))
     }
 }
 
@@ -72,11 +81,12 @@ fn model_label() -> String {
 
 // 대화형 없이 한 번 질문 — 변경 도구는 안전하게 자동 거부.
 fn one_shot(q: &str, host: &dyn Host) -> anyhow::Result<()> {
-    let store = tasks::store::Store::default_location()?;
+    let store = adapters::task_store::FileStore::default_location()?;
     let _execution = store.execution_lock()?;
     let _serve = bootstrap::BackendServeGuard::start(host)?;
     let llm = backend()?;
-    let registry = Registry::new(host.tools());
+    let workspace = std::env::current_dir()?.canonicalize()?;
+    let registry = Registry::new(host.tools(&workspace));
     let mut agent = Agent::new(
         llm.as_ref(),
         &registry,

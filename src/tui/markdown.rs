@@ -6,23 +6,13 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 
 // usix ColorTheme::USIX 팔레트. 본문은 색을 안 칠하고 단말 기본 전경(Reset)에 위임한다.
-const MUTED: Color = Color::Rgb(175, 175, 175); // gutter·라벨·HR·리스트 마커
-const QUOTE: Color = Color::Rgb(215, 215, 215); // 인용구 본문
-const ACCENT: Color = Color::Rgb(215, 175, 255); // heading 1 (lilac)
-const CODE: Color = Color::Rgb(135, 215, 215); // 인라인 코드·heading 3 (cyan)
-const LINK: Color = Color::Rgb(135, 175, 255); // 링크
+use super::theme::{CODE, MUTED, QUOTE};
+const LINK: Color = Color::LightBlue;
 
 /// heading 레벨별 (색, bold). 1→lilac·bold, 2→본문·bold, 3→cyan, 4→quote, 5·6→muted.
 fn heading_style(level: u8) -> Style {
-    let color = match level {
-        1 => ACCENT,
-        2 => Color::Reset,
-        3 => CODE,
-        4 => QUOTE,
-        _ => MUTED,
-    };
-    let mut s = Style::default().fg(color);
-    if matches!(level, 1 | 2) {
+    let mut s = Style::default().fg(Color::Reset);
+    if (1..=6).contains(&level) {
         s = s.add_modifier(Modifier::BOLD);
     }
     s
@@ -344,10 +334,10 @@ mod tests {
     }
 
     #[test]
-    fn heading_gets_accent_bold() {
+    fn heading_uses_default_foreground_and_bold() {
         let out = render("# 제목");
         assert_eq!(plain(&out[0]), "제목");
-        assert_eq!(out[0].spans[0].style.fg, Some(ACCENT));
+        assert_eq!(out[0].spans[0].style.fg, Some(Color::Reset));
         assert!(out[0].spans[0].style.add_modifier.contains(Modifier::BOLD));
     }
 

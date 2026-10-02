@@ -62,8 +62,9 @@ mod tests {
 
     #[test]
     fn host_capabilities_are_separate_and_mutations_remain_gated() {
-        let local = linux::Linux.tools();
-        let phone = termux::Termux.tools();
+        let workspace = std::env::current_dir().unwrap();
+        let local = linux::Linux.tools(&workspace);
+        let phone = termux::Termux.tools(&workspace);
         for name in [
             "read_file",
             "list_dir",
@@ -100,6 +101,23 @@ mod tests {
                         == ApprovalClass::Mutating
                 );
             }
+        }
+    }
+
+    #[test]
+    fn both_host_catalogs_fit_the_default_prompt_budget() {
+        let workspace = std::path::Path::new("/project");
+        for host in [&linux::Linux as &dyn Host, &termux::Termux as &dyn Host] {
+            let registry = crate::domain::registry::Registry::new(host.tools(workspace));
+            let cost = crate::domain::context::prompt_cost(
+                &[
+                    serde_json::json!({"role":"system","content":"policy"}),
+                    serde_json::json!({"role":"user","content":"Read README.md"}),
+                ],
+                &registry.schemas(),
+            );
+            assert!(cost + 1500 < crate::domain::context::Budget::default().prompt_tokens(),
+                "{} catalog costs {cost} estimated tokens; no room for instructions and tool results", host.name());
         }
     }
 }
