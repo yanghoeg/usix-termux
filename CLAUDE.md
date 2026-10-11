@@ -11,7 +11,7 @@ Android 기기(Termux)에서 XFCE 데스크탑 환경 + proot-distro(Ubuntu/Arch
 ## 실행 환경
 
 - **타겟 환경**: Android 기기의 Termux (`/data/data/com.termux/...` 경로)
-- **개발/편집 환경**: Linux PC (`/home/yanghoeg/code/work/linux/Termux_XFCE/`) 및 기기 Termux 내 Claude Code
+- **개발/편집 환경**: Linux PC (`/home/yanghoeg/code/work/linux/usix-termux/`) 및 기기 Termux 내 Claude Code
 - 스크립트 shebang: `#!/data/data/com.termux/files/usr/bin/bash` (일반 Linux에서 직접 실행 불가)
 - 테스트: PC 수정 → `git push` → 기기에서 `git pull` → `tests/` 단위 테스트 또는 `source domain/*.sh && <func>`
 
