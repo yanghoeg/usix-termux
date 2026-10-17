@@ -384,6 +384,37 @@ _test_autostart_idempotent() {
 }
 it "멱등성 — conky.desktop이 이미 있으면 재복사하지 않는다" _test_autostart_idempotent
 
+_test_no_conky_hides_autostart() {
+    local sb; sb=$(make_sandbox)
+    _load_domain "$sb"
+    export SCRIPT_DIR="${_REAL_PROJECT_DIR}" SKIP_CONKY=true
+
+    _setup_autostart_config 2>/dev/null || true
+    _disable_conky_autostart
+    _disable_conky_autostart
+    local n; n=$(grep -c '^Hidden=' "${HOME}/.config/autostart/conky.desktop")
+
+    assert_file_contains "${HOME}/.config/autostart/conky.desktop" "Hidden=true"
+    assert_eq "1" "$n" "재실행해도 Hidden 줄은 하나여야 한다"
+    unset SKIP_CONKY
+    cleanup_sandbox "$sb"
+}
+it "SKIP_CONKY=true면 conky 자동시작을 Hidden=true로 숨긴다" _test_no_conky_hides_autostart
+
+_test_conky_autostart_kept_by_default() {
+    local sb; sb=$(make_sandbox)
+    _load_domain "$sb"
+    export SCRIPT_DIR="${_REAL_PROJECT_DIR}"
+    unset SKIP_CONKY
+
+    _setup_autostart_config 2>/dev/null || true
+    _disable_conky_autostart
+
+    assert_file_not_contains "${HOME}/.config/autostart/conky.desktop" "Hidden="
+    cleanup_sandbox "$sb"
+}
+it "SKIP_CONKY 미지정이면 conky 자동시작을 건드리지 않는다" _test_conky_autostart_kept_by_default
+
 # =============================================================================
 # _migrate_dbus_propagate_path — /usr/bin/env → bash
 # =============================================================================

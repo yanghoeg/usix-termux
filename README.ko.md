@@ -60,6 +60,7 @@ bash install.sh --distro ubuntu --user desktop
 bash install.sh --distro archlinux --user desktop
 bash install.sh --no-proot
 bash install.sh --distro archlinux --user desktop --proot-only
+bash install.sh --distro ubuntu --user desktop --no-conky
 
 # 같은 옵션을 환경변수로 지정
 DISTRO=ubuntu USERNAME=desktop bash install.sh
@@ -71,6 +72,7 @@ DISTRO=ubuntu USERNAME=desktop bash install.sh
 | `--user`, `-u` | `USERNAME=desktop` | proot 사용자 이름 |
 | `--no-proot` | `SKIP_PROOT=true` | proot 구성 생략 |
 | `--proot-only` | `PROOT_ONLY=true` | native 데스크탑을 다시 설치하지 않고 proot만 구성 |
+| `--no-conky` | `SKIP_CONKY=true` | 배터리 절약을 위해 Conky 자동시작 끄기 |
 | `--display` | `DISPLAY_SERVER=x11` 또는 `wayland` | `x11`: XFCE, `wayland`: 실험적 KDE Plasma |
 | — | `PROOT_SHELL=bash` 또는 `zsh` | proot 대화형 셸. 새 설정의 기본값은 `bash`이며 `zsh` 선택 전에는 컨테이너 안에 해당 셸 설치 필요 |
 | `--help`, `-h` | — | 도움말 |
@@ -87,6 +89,12 @@ CLI 옵션은 대응하는 환경변수보다 우선합니다. 배포판이나 �
 비워 native 전용으로 전환합니다. 기존 컨테이너 파일은 유지합니다. 다시 사용하려면
 해당 배포판과 사용자를 지정해 재실행하세요. native 데스크탑을 갱신할 필요가 없다면
 `--proot-only`를 함께 사용하세요.
+
+Conky는 proot 안에서 실행되므로, 떠 있는 동안 컨테이너가 유지되고
+`termux-xfce-hostinfo`도 1초마다 계속 깨어납니다. `--no-conky`는
+`~/.config/autostart/conky.desktop`에 `Hidden=true`를 추가하며, 이미 설치한 기기에서
+재실행해도 적용됩니다. 다시 켜려면 XFCE 설정 → 세션 및 시작 프로그램 → 응용 프로그램
+자동 시작에서 체크하거나 해당 줄을 지우세요.
 
 **Wayland는 실험적 기능입니다.** `--display wayland`는 Anland/KWin + KDE Plasma를
 추가하며 XFCE도 X11용으로 유지합니다. ARM64 Adreno/KGSL 기기가 필요합니다.
