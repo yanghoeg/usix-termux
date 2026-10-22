@@ -231,6 +231,15 @@ installing another switches the selection. Removing the selected IME clears it,
 while rerunning setup migrates an existing selection. Restart XFCE to apply. Wayland clears these X11 IME variables and uses
 the Android keyboard through Anland.
 
+If you type Hangul on the Android soft keyboard (Samsung Keyboard etc.) and Backspace
+removes the whole composing syllable instead of its last jamo, turn off Termux:X11's
+"Enforce char based input" (`termux-x11-preference enforceCharBasedInput:false`; the
+default is off). That option blocks CJK composition. Text pasted with the keyboard's
+clipboard button can come out garbled because Termux:X11 replays it as key presses
+(termux/termux-x11#1124), and nimf in Hangul mode turns Latin letters into jamo. Paste
+with Ctrl+V inside X11 apps instead: the sync daemon and Termux:X11 "Clipboard sharing"
+already mirror the Android clipboard into the X11 clipboard.
+
 The locale installer needs a ZIP containing `ko/LC_MESSAGES/*.mo`; the GUI asks for
 it, or the CLI accepts `KOREAN_LOCALE_ZIP=/path/to/locale.zip`. See the
 [App Installer guide](app-installer/README.md#korean-input-and-localization).

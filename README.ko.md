@@ -226,6 +226,14 @@ native 입력기 선택은 `~/.config/termux-xfce/input-method`에 저장하고
 선택이 해제됩니다. 기존 선택은 재설치 시 이전합니다. XFCE를 재시작해 적용하세요.
 Wayland에서는 이 X11 입력기 변수를 지우고 Anland가 전달하는 Android 키보드를 사용합니다.
 
+Android 소프트 키보드(삼성 키보드 등)의 한글 자판으로 칠 때 조합 중인 글자가 백스페이스에
+받침부터 지워지지 않고 통째로 지워지면 Termux:X11 설정 "Enforce char based input"을 끄세요
+(`termux-x11-preference enforceCharBasedInput:false`, 기본값은 꺼짐). 이 옵션은 CJK 조합을
+막습니다. 키보드의 클립보드 버튼으로 붙여넣은 글이 깨지는 것은 Termux:X11이 그 글을 한 글자씩
+키 입력으로 흉내 내기 때문이며(termux/termux-x11#1124), nimf가 한글 모드이면 영문은 자모로
+바뀝니다. X11 앱에서는 Ctrl+V로 붙여넣으세요. Android 클립보드는 동기화 데몬과 Termux:X11
+"Clipboard sharing"이 X11 클립보드에 그대로 넣어 둡니다.
+
 로케일 설치에는 `ko/LC_MESSAGES/*.mo`가 담긴 ZIP이 필요합니다. GUI에서 파일을
 선택하거나 CLI에 `KOREAN_LOCALE_ZIP=/path/to/locale.zip`를 지정하세요.
 자세한 방법은 [App Installer 안내](app-installer/README.ko.md#한글-입력과-ui-한글화)에 있습니다.
