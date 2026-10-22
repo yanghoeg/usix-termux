@@ -179,8 +179,11 @@ _test_native_only_helpers() {
     _setup_conky_autostart
     if bash "$PREFIX/bin/prun" true > "$sb/error" 2>&1; then return 1; fi
     assert_file_contains "$sb/error" 'proot 환경이 설정되지'
-    # cp2menu reports errors through zenity too; keep it off a live X display.
-    if env -u DISPLAY bash "$PREFIX/bin/cp2menu" > "$sb/error" 2>&1; then return 1; fi
+    # Unlike prun (zenity only under PRUN_GUI=true), cp2menu always raises a
+    # zenity dialog; stub it so the test never touches a display.
+    printf '#!/data/data/com.termux/files/usr/bin/bash\nexit 0\n' > "$PREFIX/bin/zenity"
+    chmod +x "$PREFIX/bin/zenity"
+    if bash "$PREFIX/bin/cp2menu" > "$sb/error" 2>&1; then return 1; fi
     assert_file_contains "$sb/error" 'proot 환경이 설정되지'
     bash "$PREFIX/bin/termux-xfce-conky"
     cleanup_sandbox "$sb"
