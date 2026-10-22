@@ -127,6 +127,13 @@ def run_case(failure, variant):
                 plasma = next(r for r in rows if r['name']=='startplasma-wayland')
                 assert plasma['DISPLAY'] is None and plasma['WAYLAND_DISPLAY'] is None
                 assert plasma['MESA']=='kgsl' and plasma['GDK']=='wayland,x11'
+                # anland-ready is written as soon as the supervisor sees the plasmashell
+                # process; the mock may not have appended its trace row yet.
+                deadline = time.monotonic()+20
+                while time.monotonic() < deadline:
+                    rows = [json.loads(line) for line in trace.read_text().splitlines()]
+                    if any(r['name']=='plasmashell' for r in rows): break
+                    time.sleep(.1)
                 shell = next(r for r in rows if r['name']=='plasmashell')
                 assert shell['DISPLAY']==':91' and shell['WAYLAND_DISPLAY']=='wayland-0'
                 assert any(r['name']=='anland-compatible' for r in rows) == (variant=='compatible')
