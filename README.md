@@ -60,6 +60,7 @@ bash install.sh --distro ubuntu --user desktop
 bash install.sh --distro archlinux --user desktop
 bash install.sh --no-proot
 bash install.sh --distro archlinux --user desktop --proot-only
+bash install.sh --distro ubuntu --user desktop --no-conky
 
 # Equivalent environment variables
 DISTRO=ubuntu USERNAME=desktop bash install.sh
@@ -71,6 +72,7 @@ DISTRO=ubuntu USERNAME=desktop bash install.sh
 | `--user`, `-u` | `USERNAME=desktop` | proot username |
 | `--no-proot` | `SKIP_PROOT=true` | Skip proot setup |
 | `--proot-only` | `PROOT_ONLY=true` | Configure proot without reinstalling the native desktop |
+| `--no-conky` | `SKIP_CONKY=true` | Disable Conky autostart to save battery |
 | `--display` | `DISPLAY_SERVER=x11` or `wayland` | `x11`: XFCE; `wayland`: experimental KDE Plasma |
 | — | `PROOT_SHELL=bash` or `zsh` | Interactive proot shell; new configs default to `bash`. Install `zsh` in the container before selecting it |
 | `--help`, `-h` | — | Show help |
@@ -87,6 +89,12 @@ preserves the saved display backend and selects the newly configured distro/user
 saved `PROOT_DISTRO` and `PROOT_USER`. Existing containers remain on disk. To select
 one again, rerun with its distro and user, using `--proot-only` if the native desktop
 does not need updating.
+
+Conky runs inside proot, so while it is running the container stays up and
+`termux-xfce-hostinfo` keeps waking every second. `--no-conky` adds `Hidden=true` to
+`~/.config/autostart/conky.desktop`; it also works when rerunning on an existing
+install. To turn Conky back on, enable it under XFCE Settings → Session and Startup →
+Application Autostart, or delete that line.
 
 **Wayland is experimental.** `--display wayland` adds Anland/KWin + KDE Plasma; XFCE
 remains installed for X11. This path requires ARM64 Adreno/KGSL hardware. The recorded

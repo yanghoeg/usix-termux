@@ -1,6 +1,6 @@
 #!/data/data/com.termux/files/usr/bin/bash
 # =============================================================================
-# TEST: adapters — pkg_termux.sh, ui_terminal.sh
+# TEST: adapters — pkg_termux.sh, ui_terminal.sh, input/cli.sh
 # =============================================================================
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -470,5 +470,34 @@ _test_display_common_emit_has_no_placeholder() {
     && ! grep -q '__DISPLAY_COMMON' <<< "$( source "${ADAPTER_DIR}/display_wayland.sh"; display_emit_kill_session )"
 }
 it "방출된 텍스트에 __DISPLAY_COMMON 플레이스홀더가 남지 않는다" _test_display_common_emit_has_no_placeholder
+
+# =============================================================================
+# input/cli.sh — --no-conky
+# =============================================================================
+
+describe "cli.sh — --no-conky"
+
+_test_cli_no_conky_flag() {
+    unset DISTRO USERNAME SKIP_PROOT PROOT_ONLY SKIP_CONKY DISPLAY_SERVER PROOT_SHELL
+    source "${SCRIPT_DIR}/../adapters/input/cli.sh"
+    parse_cli_args --no-proot --no-conky
+    assert_eq "true" "$SKIP_CONKY"
+}
+it "--no-conky는 SKIP_CONKY=true를 설정한다" _test_cli_no_conky_flag
+
+_test_cli_no_conky_default_false() {
+    unset DISTRO USERNAME SKIP_PROOT PROOT_ONLY SKIP_CONKY DISPLAY_SERVER PROOT_SHELL
+    source "${SCRIPT_DIR}/../adapters/input/cli.sh"
+    parse_cli_args --no-proot
+    assert_eq "false" "$SKIP_CONKY"
+}
+it "--no-conky 없으면 SKIP_CONKY=false" _test_cli_no_conky_default_false
+
+_test_cli_no_conky_rejects_bad_env() {
+    unset DISTRO USERNAME SKIP_PROOT PROOT_ONLY DISPLAY_SERVER PROOT_SHELL
+    source "${SCRIPT_DIR}/../adapters/input/cli.sh"
+    ! ( SKIP_CONKY=yes parse_cli_args --no-proot ) 2>/dev/null
+}
+it "SKIP_CONKY가 true/false가 아니면 거부한다" _test_cli_no_conky_rejects_bad_env
 
 print_results

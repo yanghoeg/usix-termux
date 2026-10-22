@@ -157,6 +157,7 @@ _migrate_autostart_not_show_in_kde() {
 setup_xfce_autostart() {
     ui_info "자동시작 설정 (Conky, Flameshot)"
     _setup_autostart_config
+    _disable_conky_autostart
     _migrate_fix_x11_input
     _migrate_autostart_not_show_in_kde
     _migrate_flameshot_native
@@ -277,6 +278,18 @@ _install_fancybash() {
     local bashrc="$PREFIX/etc/bash.bashrc"
     grep -q "source.*\.fancybash\.sh" "$bashrc" 2>/dev/null || \
         echo "source \$HOME/.fancybash.sh" >> "$bashrc"
+}
+
+# --no-conky: 자동시작 항목만 숨긴다. 파일은 남겨 XFCE "세션 및 시작 프로그램"에서 다시 켤 수 있다.
+# Why: conky가 떠 있으면 proot 게스트가 살아 있어 termux-xfce-hostinfo도 1초마다 계속 돈다.
+#      플래그 없이 재설치할 때는 건드리지 않아 사용자가 끈 설정을 되살리지 않는다.
+_disable_conky_autostart() {
+    [ "${SKIP_CONKY:-false}" = true ] || return 0
+    local desktop="$HOME/.config/autostart/conky.desktop"
+    [ -f "$desktop" ] || return 0
+    grep -qx 'Hidden=true' "$desktop" && return 0
+    sed -i '/^Hidden=/d' "$desktop"
+    echo 'Hidden=true' >> "$desktop"
 }
 
 # 자동시작 + XFCE 프리셋(.config 하위 전체) 1회성 배포
