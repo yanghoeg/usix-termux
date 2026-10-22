@@ -92,6 +92,16 @@ def run_case(failure, variant):
     for d in (state, runtime, temp): d.mkdir(parents=True)
     (Path(os.environ['HOME']) / '.config/termux-xfce/anland-variant').write_text(variant+'\n')
     trace = case / 'trace.jsonl'
+    def read_rows():
+        return [json.loads(line) for line in trace.read_text().splitlines()]
+    def wait_rows(pred, secs):
+        # Poll the trace until pred(rows) holds or the deadline passes; the caller
+        # asserts on the returned rows so a timeout reports what was seen.
+        deadline = time.monotonic()+secs
+        while True:
+            rows = read_rows()
+            if pred(rows) or time.monotonic() >= deadline: return rows
+            time.sleep(.1)
     env = dict(os.environ, PATH=str(bin_dir)+os.pathsep+os.environ['PATH'],
                SESSION_STATE_DIR=str(state), XDG_RUNTIME_DIR=str(runtime), TMPDIR=str(temp),
                ANLAND_TEST_TRACE=str(trace), ANLAND_TEST_FAIL=failure,
@@ -114,9 +124,7 @@ def run_case(failure, variant):
             while time.monotonic() < deadline:
                 if proc.poll() is not None or (state/'anland-ready').exists(): break
                 time.sleep(.05)
-            rows = [json.loads(line) for line in trace.read_text().splitlines()]
-            # The startup deadline is the supervisor's; no session process inherits it.
-            assert all(r['DEADLINE'] is None for r in rows), rows
+            rows = read_rows()
             if failure:
                 assert proc.wait(timeout=35 if failure == 'plasmashell' else 120) != 0, (failure, (case/'log').read_text())
                 assert not (state/'anland-ready').exists()
@@ -124,16 +132,13 @@ def run_case(failure, variant):
                 assert (state/'anland-ready').exists(), (case/'log').read_text()
                 # The marker carries the socket name KWin actually picked.
                 assert (state/'anland-ready').read_text().strip() == 'wayland-0', (case/'log').read_text()
+                # anland-ready is written as soon as the supervisor sees the plasmashell
+                # process; the mock may not have appended its trace row yet.
+                rows = wait_rows(lambda rows: any(r['name']=='plasmashell' for r in rows), 20)
+                assert any(r['name']=='plasmashell' for r in rows), (case/'log').read_text()
                 plasma = next(r for r in rows if r['name']=='startplasma-wayland')
                 assert plasma['DISPLAY'] is None and plasma['WAYLAND_DISPLAY'] is None
                 assert plasma['MESA']=='kgsl' and plasma['GDK']=='wayland,x11'
-                # anland-ready is written as soon as the supervisor sees the plasmashell
-                # process; the mock may not have appended its trace row yet.
-                deadline = time.monotonic()+20
-                while time.monotonic() < deadline:
-                    rows = [json.loads(line) for line in trace.read_text().splitlines()]
-                    if any(r['name']=='plasmashell' for r in rows): break
-                    time.sleep(.1)
                 shell = next(r for r in rows if r['name']=='plasmashell')
                 assert shell['DISPLAY']==':91' and shell['WAYLAND_DISPLAY']=='wayland-0'
                 assert any(r['name']=='anland-compatible' for r in rows) == (variant=='compatible')
@@ -141,19 +146,21 @@ def run_case(failure, variant):
                 # The low-memory killer takes plasmashell in practice; the
                 # supervisor must bring it back instead of leaving a black screen.
                 os.kill(shell['pid'], signal.SIGKILL)
-                deadline = time.monotonic()+20
-                while time.monotonic() < deadline:
-                    shells = [json.loads(l) for l in trace.read_text().splitlines()
-                              if json.loads(l)['name']=='plasmashell']
-                    if len(shells) > 1 and alive(shells[-1]['pid']): break
-                    time.sleep(.1)
+                def respawned(rows):
+                    shells = [r for r in rows if r['name']=='plasmashell']
+                    return len(shells) > 1 and alive(shells[-1]['pid'])
+                rows = wait_rows(respawned, 20)
+                shells = [r for r in rows if r['name']=='plasmashell']
                 assert len(shells) > 1, ('shell not respawned', (case/'log').read_text())
                 assert shells[-1]['WAYLAND_DISPLAY']=='wayland-0', shells[-1]
-                rows = [json.loads(line) for line in trace.read_text().splitlines()]
                 os.kill(plasma['pid'], signal.SIGTERM)
                 # Cleanup runs process discovery and two Python Android stubs;
                 # their startup alone can exceed 8s on a busy Android device.
                 proc.wait(timeout=30)
+            # The startup deadline is the supervisor's; no session process inherits it.
+            # Checked last so the plasmashell rows, whose environ is persisted to
+            # plasma.env and replayed on respawn, are covered too.
+            assert all(r['DEADLINE'] is None for r in rows), rows
             deadline = time.monotonic()+3
             while time.monotonic()<deadline and any(alive(r['pid']) for r in rows): time.sleep(.05)
             assert not any(alive(r['pid']) for r in rows), ('child leaked', rows)
