@@ -220,6 +220,14 @@ Wayland의 아래 알려진 차단 문제도 남아 있다.
   - Wayland는 `$TMPDIR/.X11-unix`가 1777이어야 한다 — sticky bit가 없으면 KWin의 Xwayland가
     소켓 생성을 거부하고 `DISPLAY`가 비어 세션이 즉시 죽는다
   - X11: `termux-x11 :N` → 소켓 자동 감지 (`${TMPDIR}/.X11-unix/X*`)
+- **Termux:X11 소프트 키보드 한글 경로**: 삼성 키보드 등 Android IME의 한글은 Termux:X11이
+  `setComposingText`/`commitText`로 받아 음절마다 BackSpace + 유니코드 키 주입(동적 keycode)으로
+  조합을 흉내 낸다(`LorieView.replaceText` → `sendTextEvent`). nimf/fcitx5는 이 경로에 관여하지 않는다.
+  Termux:X11 "Enforce char based input"(`enforceCharBasedInput`, 기본 false)은 입력 타입을 TYPE_NULL로
+  바꿔 CJK 조합을 막는다 — 조합 중 백스페이스가 음절을 통째로 지우면 `termux-x11-preference
+  enforceCharBasedInput:false`. 키보드 클립보드 버튼 붙여넣기도 같은 키 주입이라 글자가 바뀔 수 있다
+  (termux/termux-x11#1124, 2026-10 미해결) → X11 앱에서는 Ctrl+V. Termux:X11이 Termux와 UID를 공유하므로
+  `logcat -d | grep LorieNative`로 "Parsing text"/"Trying to input keysym"을 볼 수 있다
 - **기본 쉘은 zsh + Powerlevel10k**: `domain/termux_env.sh` `_setup_zsh_p10k()`가 설치 시 자동 구성
   - RC 파일 수정은 bash/zsh 양쪽 모두 반영해야 함 (`_rc_targets()` + `_append_to_rc()` 참조)
 - **Wine 백엔드는 2종 공존**: `app-installer/lib/wine_backend.sh`가 선택 로직을 소유
