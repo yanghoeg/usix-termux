@@ -237,9 +237,9 @@ Termux:X11 only imitates composition and never tells the keyboard what is being
 composed, so the keyboard sends a plain delete; no Termux:X11 setting changes this.
 Keep "Enforce char based input" off (the default), because it blocks composition
 entirely. To delete jamo by jamo, select nimf, keep the Android keyboard on its English
-layout, and switch nimf to Hangul with Shift+Space. Installing nimf adds a one-tap
-`한/영` key (`{macro: 'SHIFT SPACE', display: '한/영'}`) to the Termux:X11 extra keys
-bar. Text pasted with the keyboard's
+layout, and switch nimf to Hangul with Shift+Space. Adding
+`{macro: 'SHIFT SPACE', display: '한/영'}` to the Termux:X11 extra keys config gives a
+one-tap toggle. Text pasted with the keyboard's
 clipboard button can come out garbled because Termux:X11 replays it as key presses
 (termux/termux-x11#1124), and nimf in Hangul mode turns Latin letters into jamo. Paste
 with Ctrl+V inside X11 apps instead: the sync daemon and Termux:X11 "Clipboard sharing"

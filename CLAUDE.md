@@ -228,8 +228,8 @@ Wayland의 아래 알려진 차단 문제도 남아 있다.
   확인, upstream master도 같음). `enforceCharBasedInput`(기본 false)은 이와 무관하다 — 켜면 TYPE_NULL이라
   조합 자체가 막힌다. 자모 단위 삭제는 Android 키보드 영문 자판 + nimf libhangul(X 안에서 조합)로만 된다.
   한/영은 nimf 기본 `org.nimf hotkeys`의 `<Shift> space`, Termux:X11 추가 키는
-  `{macro: 'SHIFT SPACE', display: '한/영'}`(macro는 실제 Shift_L+space 키 이벤트를 보낸다) —
-  App Installer `nimf` 설치가 마지막 줄 끝에 넣고 제거가 뺀다(`_nimf_x11_toggle_key`). nimf 한/영
+  `{macro: 'SHIFT SPACE', display: '한/영'}`(macro는 실제 Shift_L+space 키 이벤트를 보낸다). 설치기는
+  이 키를 넣지 않는다 — 2026-10-23 넣었다가 사용자가 삼성 한글 자판을 계속 쓰기로 해 되돌렸다. nimf 한/영
   상태는 창(입력 컨텍스트)마다 따로다(`use-singleton`이어도 새 창은 영문으로 시작, 2026-10-23 확인).
   `termux-x11-preference key:value`는 값을 콜론마다 잘라 콜론이 든 값(`extra_keys_config`)이 깨진다 →
   stdin에 `"key"="value"` 줄로 넘긴다. stdin이 tty가 아니면 EOF까지 읽으므로 `list`도 `< /dev/null`로 실행.
