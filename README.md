@@ -231,10 +231,15 @@ installing another switches the selection. Removing the selected IME clears it,
 while rerunning setup migrates an existing selection. Restart XFCE to apply. Wayland clears these X11 IME variables and uses
 the Android keyboard through Anland.
 
-If you type Hangul on the Android soft keyboard (Samsung Keyboard etc.) and Backspace
-removes the whole composing syllable instead of its last jamo, turn off Termux:X11's
-"Enforce char based input" (`termux-x11-preference enforceCharBasedInput:false`; the
-default is off). That option blocks CJK composition. Text pasted with the keyboard's
+If you type Hangul with the Android soft keyboard's Korean layout (Samsung Keyboard
+etc.), Backspace removes the whole composing syllable instead of its last jamo.
+Termux:X11 only imitates composition and never tells the keyboard what is being
+composed, so the keyboard sends a plain delete; no Termux:X11 setting changes this.
+Keep "Enforce char based input" off (the default), because it blocks composition
+entirely. To delete jamo by jamo, select nimf, keep the Android keyboard on its English
+layout, and switch nimf to Hangul with Shift+Space. Installing nimf adds a one-tap
+`한/영` key (`{macro: 'SHIFT SPACE', display: '한/영'}`) to the Termux:X11 extra keys
+bar. Text pasted with the keyboard's
 clipboard button can come out garbled because Termux:X11 replays it as key presses
 (termux/termux-x11#1124), and nimf in Hangul mode turns Latin letters into jamo. Paste
 with Ctrl+V inside X11 apps instead: the sync daemon and Termux:X11 "Clipboard sharing"
