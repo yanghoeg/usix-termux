@@ -252,6 +252,66 @@ _test_sb_start_xfce_has_session_duplicate_check() {
 }
 it "X11 세션 중복 감지 로직이 있다" _test_sb_start_xfce_has_session_duplicate_check
 
+# 생성한 startXFCE를 샌드박스에서 돌릴 준비 — 세션·기기를 건드리는 명령은 호출만 기록하는 함수로 가린다
+_sb_start_xfce_sandbox() {
+    local sb="$1" cmd
+    export HOME="$sb/home" PREFIX="$sb/usr" TMPDIR="$sb/tmp" TEST_CALLS="$sb/calls"
+    mkdir -p "$HOME" "$PREFIX" "$TMPDIR"
+    unset DISPLAY
+    for cmd in am pgrep pkill termux-x11 termux-wake-lock termux-wake-unlock zenity pulseaudio pacmd; do
+        printf '%s() { echo "%s $*" >> "$TEST_CALLS"; return 1; }\n' "$cmd" "$cmd"
+    done > "$sb/stubs"
+}
+
+_test_sb_start_xfce_skips_while_starting() {
+    source "${ADAPTER_DIR}/display_x11.sh"
+    source "${ADAPTER_DIR}/script_builder_zenity.sh"
+    local sb; sb=$(make_sandbox)
+    _sb_start_xfce_sandbox "$sb"
+    script_build_start_xfce "$sb/startXFCE"
+    cat "$sb/stubs" "$sb/startXFCE" > "$sb/launcher"
+    local lock="$HOME/.cache/termux-xfce/session/start.lock"
+    mkdir -p "${lock%/*}"
+    # 먼저 시작한 런처가 잠금을 잡고 있는 상태
+    exec 8>"$lock"
+    flock -n 8
+    local rc=0 held=0
+    bash "$sb/launcher" > "$sb/output" 2>&1 || rc=$?
+    flock -n "$lock" true || held=1
+    exec 8>&-
+    assert_eq 0 "$rc"
+    assert_file_contains "$sb/output" "건너뜁니다"
+    assert_eq 1 "$held"
+    assert_eq "" "$(cat "$TEST_CALLS" 2>/dev/null || true)"
+    cleanup_sandbox "$sb"
+}
+it "X11 startXFCE는 다른 시작이 진행 중이면 아무것도 건드리지 않고 빠진다" _test_sb_start_xfce_skips_while_starting
+
+_test_sb_start_xfce_unlocks_on_exit() {
+    source "${ADAPTER_DIR}/display_x11.sh"
+    source "${ADAPTER_DIR}/script_builder_zenity.sh"
+    local sb; sb=$(make_sandbox)
+    _sb_start_xfce_sandbox "$sb"
+    display_emit_kill_session() { echo '_kill_display_session() { :; }'; }
+    # 세션 프로세스처럼 런처의 fd를 물려받아 런처보다 오래 사는 자식
+    display_emit_server_start() { echo 'sleep 10 & echo "$!" > "$SESSION_STATE_DIR/child.pid"'; }
+    script_build_start_xfce "$sb/startXFCE"
+    # PulseAudio부터는 잘라 내 자식을 띄운 뒤 바로 끝나는 런처로 만든다
+    { cat "$sb/stubs"; awk '/^_PA_PRELOAD=/ { exit } { print }' "$sb/startXFCE"; } > "$sb/launcher"
+    bash "$sb/launcher" > "$sb/output" 2>&1
+    local state="$HOME/.cache/termux-xfce/session" child made=0 free=0
+    read -r child < "$state/child.pid"
+    kill -0 "$child"
+    # flock이 잠금 파일을 만들기 전에 런처가 만들었는지 본다
+    [ -e "$state/start.lock" ] && made=1
+    flock -n "$state/start.lock" true && free=1
+    kill "$child"
+    assert_eq 1 "$made"
+    assert_eq 1 "$free"
+    cleanup_sandbox "$sb"
+}
+it "X11 startXFCE는 끝날 때 잠금을 풀어, fd를 물려받은 자식이 남아도 다음 실행을 막지 않는다" _test_sb_start_xfce_unlocks_on_exit
+
 _test_sb_start_xfce_tracks_session_pids() {
     source "${ADAPTER_DIR}/display_x11.sh"
     source "${ADAPTER_DIR}/script_builder_zenity.sh"
