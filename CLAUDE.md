@@ -223,9 +223,17 @@ Wayland의 아래 알려진 차단 문제도 남아 있다.
 - **Termux:X11 소프트 키보드 한글 경로**: 삼성 키보드 등 Android IME의 한글은 Termux:X11이
   `setComposingText`/`commitText`로 받아 음절마다 BackSpace + 유니코드 키 주입(동적 keycode)으로
   조합을 흉내 낸다(`LorieView.replaceText` → `sendTextEvent`). nimf/fcitx5는 이 경로에 관여하지 않는다.
-  Termux:X11 "Enforce char based input"(`enforceCharBasedInput`, 기본 false)은 입력 타입을 TYPE_NULL로
-  바꿔 CJK 조합을 막는다 — 조합 중 백스페이스가 음절을 통째로 지우면 `termux-x11-preference
-  enforceCharBasedInput:false`. 키보드 클립보드 버튼 붙여넣기도 같은 키 주입이라 글자가 바뀔 수 있다
+  InputConnection이 커서 앞 글자를 늘 공백으로 답하고 조합 구간을 보고하지 않아, 조합 중 백스페이스에
+  삼성 키보드가 줄인 음절(율→유)을 보내지 않고 그냥 지운다 → 음절이 통째로 지워진다(2026-10-23 logcat
+  확인, upstream master도 같음). `enforceCharBasedInput`(기본 false)은 이와 무관하다 — 켜면 TYPE_NULL이라
+  조합 자체가 막힌다. 자모 단위 삭제는 Android 키보드 영문 자판 + nimf libhangul(X 안에서 조합)로만 된다.
+  한/영은 nimf 기본 `org.nimf hotkeys`의 `<Shift> space`, Termux:X11 추가 키는
+  `{macro: 'SHIFT SPACE', display: '한/영'}`(macro는 실제 Shift_L+space 키 이벤트를 보낸다) —
+  App Installer `nimf` 설치가 마지막 줄 끝에 넣고 제거가 뺀다(`_nimf_x11_toggle_key`). nimf 한/영
+  상태는 창(입력 컨텍스트)마다 따로다(`use-singleton`이어도 새 창은 영문으로 시작, 2026-10-23 확인).
+  `termux-x11-preference key:value`는 값을 콜론마다 잘라 콜론이 든 값(`extra_keys_config`)이 깨진다 →
+  stdin에 `"key"="value"` 줄로 넘긴다. stdin이 tty가 아니면 EOF까지 읽으므로 `list`도 `< /dev/null`로 실행.
+  키보드 클립보드 버튼 붙여넣기도 같은 키 주입이라 글자가 바뀔 수 있다
   (termux/termux-x11#1124, 2026-10 미해결) → X11 앱에서는 Ctrl+V. Termux:X11이 Termux와 UID를 공유하므로
   `logcat -d | grep LorieNative`로 "Parsing text"/"Trying to input keysym"을 볼 수 있다
 - **기본 쉘은 zsh + Powerlevel10k**: `domain/termux_env.sh` `_setup_zsh_p10k()`가 설치 시 자동 구성
