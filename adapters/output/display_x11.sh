@@ -17,6 +17,13 @@ display_emit_kill_session() {
 
 display_emit_session_detect() {
     cat << 'FRAG'
+# ─── 동시 실행 방지: 위젯을 연달아 누르면 둘 다 "세션 없음"으로 보고 세션을 두 개 띄운다 ───
+# 먼저 시작한 쪽이 끝날 때까지 나중 실행은 아무것도 건드리지 않고 빠진다(원래 세션 유지).
+exec 9>"$SESSION_STATE_DIR/start.lock"
+if ! flock -n 9; then
+    echo "XFCE 세션을 시작하는 중입니다. 이번 실행은 건너뜁니다." >&2
+    exit 0
+fi
 # ─── X11 세션 중복 감지: X 소켓 또는 세션 프로세스가 남아 있으면 다이얼로그 ───
 _EXISTING_SOCK=$(ls "${TMPDIR}/.X11-unix/X"* 2>/dev/null | head -1)
 _EXISTING_XFCE=$(pgrep -x xfce4-session 2>/dev/null | head -1 || echo "")
