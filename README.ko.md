@@ -231,8 +231,8 @@ Android 소프트 키보드(삼성 키보드 등)의 한글 자판으로 치면 
 글자를 알려 주지 않아서 키보드가 일반 삭제를 보내기 때문이며, Termux:X11 설정으로는 바뀌지
 않습니다. "Enforce char based input"은 조합 자체를 막으니 꺼 두세요(기본값). 받침부터 지우려면
 nimf를 선택하고 Android 키보드를 영문 자판으로 둔 채 Shift+Space로 nimf를 한글 모드로 바꾸세요.
-nimf를 설치하면 Termux:X11 추가 키 바에 한 번에 전환하는 `한/영` 키
-(`{macro: 'SHIFT SPACE', display: '한/영'}`)가 들어갑니다. 키보드의 클립보드 버튼으로 붙여넣은
+Termux:X11 추가 키 설정(extra keys config)에 `{macro: 'SHIFT SPACE', display: '한/영'}`을
+넣으면 한 번에 전환할 수 있습니다. 키보드의 클립보드 버튼으로 붙여넣은
 글이 깨지는 것은 Termux:X11이 그 글을 한 글자씩 키 입력으로 흉내 내기 때문이며
 (termux/termux-x11#1124), nimf가 한글 모드이면 영문은 자모로 바뀝니다. X11 앱에서는 Ctrl+V로
 붙여넣으세요. Android 클립보드는 동기화 데몬과 Termux:X11 "Clipboard sharing"이 X11 클립보드에
