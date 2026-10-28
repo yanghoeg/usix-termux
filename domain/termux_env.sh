@@ -204,18 +204,8 @@ _install_base_packages() {
         all_pkgs+=("${PKGS_TERMUX_PROOT[@]}")
     fi
 
-    # dbus 리셋: dbus 락/소켓 상태 초기화로 startXFCE의 dbus-launch와
-    # proot-distro 내부 dbus-daemon 간 소켓 경합을 예방.
-    # 단, XFCE가 이미 설치된 idempotent 재실행에서는 cascade 제거를 피함
-    # — `pkg uninstall dbus` 는 dbus를 require하는 64개 (xfce4, fcitx5 전체) 까지 함께 제거.
-    # XFCE가 깔려 있다는 건 이전 설치가 성공했다는 뜻 → dbus 리셋 불필요.
-    # 마커 파일로 원샷 처리: 설치가 xfce4-session 이전에 크래시한 뒤 재실행되는 경우,
-    # 매번 dbus를 재제거하면 그 사이 사용자가 설치한 dbus 의존 패키지(예: fcitx5)까지 cascade 제거됨.
-    local dbus_reset_marker="$HOME/.config/termux-xfce/.dbus-reset-done"
-    if pkg_is_installed "dbus" && ! pkg_is_installed "xfce4-session" && [ ! -f "$dbus_reset_marker" ]; then
-        pkg_remove dbus
-        mkdir -p "$(dirname "$dbus_reset_marker")" && : > "$dbus_reset_marker"
-    fi
+    # 첫 XFCE 설치에서도 기존 dbus 의존 앱이 있을 수 있다. 패키지 제거로 소켓을
+    # 리셋하면 의존 앱까지 연쇄 제거하므로, 기존 패키지와 실행 중인 버스는 보존한다.
 
     local total=${#all_pkgs[@]} i=0
     for p in "${all_pkgs[@]}"; do
@@ -781,26 +771,35 @@ _tick() {
         c="$CPU_ROOT/cpu$n"
         [ -d "$c" ] || continue
         if [ -r "$c/online" ] && read -r v < "$c/online" && [ "$v" = 0 ]; then
+            # 꺼진 코어도 이전 누적값은 전체 cpu 합계에 남긴다. 첫 표본부터 꺼져
+            # 있던 코어는 0에서 시작해 나중에 켜질 때 부팅 이후 값이 한꺼번에 더해지지 않게 한다.
+            BUSY[$n]=${BUSY[$n]:-0}
+            IDLE[$n]=${IDLE[$n]:-0}
+            unset 'LAST[$n]'
             continue    # 커널처럼 꺼진 코어는 줄을 뺀다
         fi
         s=0
         for t in "$c"/cpuidle/state*/time; do
             [ -r "$t" ] && read -r v < "$t" && s=$(( s + v ))
         done
-        if [ -z "${LAST[$n]}" ]; then
+        if [ -z "${BUSY[$n]+set}" ]; then
             # 첫 표본은 부팅 이후 누적값으로 시작해, 다시 떠도 카운터가 크게 튀지 않게 한다
             IDLE[$n]=$s
             BUSY[$n]=$(( now - BTIME * 1000000 - s ))
             (( BUSY[$n] < 0 )) && BUSY[$n]=0
-        else
+        elif [ -n "${LAST[$n]:-}" ]; then
             d=$(( s - LAST[$n] ))
             (( d < 0 )) && d=0
             (( d > w )) && d=$w
             IDLE[$n]=$(( IDLE[$n] + d ))
             BUSY[$n]=$(( BUSY[$n] + w - d ))
         fi
+        # 재온라인 첫 표본은 기준만 갱신한다. offline 구간의 idle 증가나
+        # cpuidle 카운터 초기화를 현재 한 구간의 사용량으로 계산하지 않는다.
         LAST[$n]=$s
         lines+="cpu$n $(( BUSY[$n] / 10000 )) 0 0 $(( IDLE[$n] / 10000 )) 0 0 0 0 0 0"$'\n'
+    done
+    for n in "${!BUSY[@]}"; do
         tb=$(( tb + BUSY[$n] / 10000 ))
         ti=$(( ti + IDLE[$n] / 10000 ))
     done

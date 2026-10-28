@@ -749,18 +749,19 @@ _test_base_pkgs_skips_installed() {
 }
 it "멱등성 — 이미 설치된 패키지는 건너뛴다 (XFCE 있으면 dbus도 보존)" _test_base_pkgs_skips_installed
 
-_test_base_pkgs_dbus_removed_on_clean_install() {
-    # 클린 설치 (XFCE 없음): dbus 리셋 의도대로 작동
+_test_base_pkgs_dbus_preserved_without_xfce() {
+    # XFCE가 없어도 사용자가 설치한 다른 앱이 dbus에 의존할 수 있다.
     local sb; sb=$(make_sandbox)
     _load_domain "$sb"
     reset_mock_calls
-    MOCK_INSTALLED_PKGS="dbus"   # dbus만 잔존 (xfce4-session 없음)
+    MOCK_INSTALLED_PKGS="dbus fcitx5"
 
     _install_base_packages 2>/dev/null || true
-    assert_was_called "pkg_remove dbus"
+    assert_not_called "pkg_remove dbus"
+    assert_not_called "pkg_install dbus"
     cleanup_sandbox "$sb"
 }
-it "클린 설치 (XFCE 없음) — dbus 리셋을 위해 제거된다" _test_base_pkgs_dbus_removed_on_clean_install
+it "XFCE 첫 설치에서도 기존 dbus와 의존 앱을 보존한다" _test_base_pkgs_dbus_preserved_without_xfce
 
 _test_base_pkgs_dbus_preserved_when_xfce_installed() {
     # 회귀: Stage 7 같은 멱등 재실행에서 dbus 제거 → 64개 cascade 제거 방지
@@ -775,36 +776,40 @@ _test_base_pkgs_dbus_preserved_when_xfce_installed() {
 }
 it "XFCE 설치된 idempotent 재실행에서는 dbus를 보존한다 (cascade 제거 차단)" _test_base_pkgs_dbus_preserved_when_xfce_installed
 
-_test_base_pkgs_dbus_reset_marker_created() {
-    # 클린 설치로 dbus를 리셋하면 원샷 마커 파일이 생겨야 한다
+_test_base_pkgs_preserves_running_dbus_files() {
     local sb; sb=$(make_sandbox)
     _load_domain "$sb"
     reset_mock_calls
-    MOCK_INSTALLED_PKGS="dbus"   # dbus만 잔존 (xfce4-session 없음)
+    MOCK_INSTALLED_PKGS="dbus"
+    mkdir -p "$HOME/.dbus/session-bus" "$PREFIX/tmp"
+    printf 'active socket\n' > "$PREFIX/tmp/dbus-existing"
+    printf 'active address\n' > "$HOME/.dbus/session-bus/existing"
 
     _install_base_packages 2>/dev/null || true
-    assert_file_exists "${HOME}/.config/termux-xfce/.dbus-reset-done"
+    assert_file_contains "$PREFIX/tmp/dbus-existing" '^active socket$'
+    assert_file_contains "$HOME/.dbus/session-bus/existing" '^active address$'
+    [ ! -e "$HOME/.config/termux-xfce/.dbus-reset-done" ]
     cleanup_sandbox "$sb"
 }
-it "클린 설치로 dbus 리셋 시 원샷 마커 파일을 생성한다" _test_base_pkgs_dbus_reset_marker_created
+it "기본 패키지 설치는 실행 중인 DBus 세션 파일을 건드리지 않는다" _test_base_pkgs_preserves_running_dbus_files
 
-_test_base_pkgs_dbus_reset_one_shot() {
-    # 첫 실행에서 dbus를 리셋한 뒤, 같은 샌드박스에서 재실행(여전히 XFCE 없음)해도
-    # 마커가 있으면 두 번째 pkg_remove dbus 호출은 없어야 한다 (재크래시 후 재실행 시나리오)
+_test_base_pkgs_dbus_preserved_across_retries() {
+    # 설치가 XFCE 패키지를 설치하기 전에 중단된 경우도 두 실행 모두 안전해야 한다.
     local sb; sb=$(make_sandbox)
     _load_domain "$sb"
     reset_mock_calls
     MOCK_INSTALLED_PKGS="dbus"   # dbus만 잔존 (xfce4-session 없음)
 
-    _install_base_packages 2>/dev/null || true   # 1차 실행 — 마커 생성
+    _install_base_packages
+    assert_not_called "pkg_remove dbus"
     reset_mock_calls
     MOCK_INSTALLED_PKGS="dbus"   # 여전히 xfce4-session 없음
 
-    _install_base_packages 2>/dev/null || true   # 2차 실행 — 마커 존재 시 리셋 생략
+    _install_base_packages
     assert_not_called "pkg_remove dbus"
     cleanup_sandbox "$sb"
 }
-it "dbus 리셋은 원샷 — 마커 존재 시 재실행에서 다시 제거하지 않는다" _test_base_pkgs_dbus_reset_one_shot
+it "XFCE 설치 전 중단 후 재실행에서도 기존 dbus를 보존한다" _test_base_pkgs_dbus_preserved_across_retries
 
 # =============================================================================
 # setup_termux_shortcuts — composition 함수 검증
@@ -856,8 +861,7 @@ _test_install_base_packages_completes_under_set_e() {
     for call in "${MOCK_CALLS[@]:-}"; do
         [[ "$call" == pkg_install* ]] && install_count=$((install_count + 1))
     done
-    # dbus 재설치(remove → install) 1건 포함해 최소 total건은 호출되어야 함
-    [ "$install_count" -ge "$total" ]
+    [ "$install_count" -eq "$total" ]
     cleanup_sandbox "$sb"
 }
 it "_install_base_packages가 set -e 하에서 끝까지 실행된다" _test_install_base_packages_completes_under_set_e

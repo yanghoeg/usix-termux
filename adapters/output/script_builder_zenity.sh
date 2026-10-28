@@ -49,7 +49,7 @@ chmod 700 "$SESSION_STATE_DIR" 2>/dev/null || true
 _cleanup_failed_start() {
     local rc=$?
     trap - EXIT INT TERM
-    if [ "$rc" -ne 0 ] && { [ "${_DISPLAY_SERVER:-x11}" = x11 ] || [ "${_ANLAND_START_OWNED:-false}" = true ]; }; then
+    if [ "$rc" -ne 0 ] && { [ "${_X11_START_OWNED:-false}" = true ] || [ "${_ANLAND_START_OWNED:-false}" = true ]; }; then
         _kill_display_session
         termux-wake-unlock 2>/dev/null || true
     fi

@@ -89,6 +89,52 @@ _test_stat_from_cpuidle() {
 }
 it "cpuidle 체류 시간으로 코어별 /proc/stat을 만들고 꺼진 코어와 btime을 반영한다" _test_stat_from_cpuidle
 
+_test_cpu_hotplug_keeps_cumulative_totals() {
+    local sb; sb=$(make_sandbox); _setup_hostinfo_sandbox "$sb"
+    # 데몬의 같은 프로세스에서 표본을 갱신하되 시각과 sysfs만 결정적인 값으로 바꾼다.
+    PATH="$sb/fakebin:$PATH" HOSTINFO_DIR="$sb/out" HOSTINFO_CPU_ROOT="$sb/cpu" \
+        "$_BASH" -s -- "$PREFIX/bin/termux-xfce-hostinfo" "$sb" << 'EOF'
+source <(sed '/^case "${1:-start}" in/,$d' "$1")
+sb="$2"
+mkdir -p "$OUT"
+BTIME=100
+unset EPOCHREALTIME
+EPOCHREALTIME=110.000000; _tick; cp "$OUT/stat" "$sb/before"
+echo 0 > "$CPU_ROOT/cpu1/online"
+EPOCHREALTIME=111.000000; _tick; cp "$OUT/stat" "$sb/offline"
+# offline 중 idle이 크게 증가해도 복귀 표본에서 더하지 않는다.
+echo 99000000 > "$CPU_ROOT/cpu1/cpuidle/state0/time"
+EPOCHREALTIME=112.000000; _tick; cp "$OUT/stat" "$sb/still-offline"
+echo 1 > "$CPU_ROOT/cpu1/online"
+EPOCHREALTIME=113.000000; _tick; cp "$OUT/stat" "$sb/online"
+# 처음부터 꺼져 있던 코어가 켜져도 부팅 이후 사용량이 새로 붙지 않는다.
+echo 1 > "$CPU_ROOT/cpu2/online"
+EPOCHREALTIME=114.000000; _tick; cp "$OUT/stat" "$sb/first-online"
+echo 99500000 > "$CPU_ROOT/cpu1/cpuidle/state0/time"
+EPOCHREALTIME=115.000000; _tick; cp "$OUT/stat" "$sb/next"
+# cpuidle 카운터가 offline 중 초기화되는 기기도 다음 표본부터 정상 계산한다.
+echo 0 > "$CPU_ROOT/cpu1/online"
+EPOCHREALTIME=116.000000; _tick
+echo 100000 > "$CPU_ROOT/cpu1/cpuidle/state0/time"
+echo 1 > "$CPU_ROOT/cpu1/online"
+EPOCHREALTIME=117.000000; _tick
+echo 350000 > "$CPU_ROOT/cpu1/cpuidle/state0/time"
+EPOCHREALTIME=118.000000; _tick; cp "$OUT/stat" "$sb/reset-next"
+EOF
+    local rc=0
+    # 첫 두 코어의 누적 busy=1650, idle=350 jiffies; offline 동안 cpu0만 매초 +100.
+    assert_file_contains "$sb/offline" '^cpu  1750 0 0 350 ' || rc=1
+    assert_file_not_contains "$sb/offline" '^cpu1 ' || rc=1
+    assert_file_contains "$sb/still-offline" '^cpu  1850 0 0 350 ' || rc=1
+    assert_eq "$(awk '$1 == "cpu1" { print $2, $5 }' "$sb/before")" \
+        "$(awk '$1 == "cpu1" { print $2, $5 }' "$sb/online")" "재online 시 offline 구간을 제외한다" || rc=1
+    assert_file_contains "$sb/first-online" '^cpu2 0 0 0 0 ' || rc=1
+    assert_file_contains "$sb/next" '^cpu1 1100 0 0 100 ' || rc=1
+    assert_file_contains "$sb/reset-next" '^cpu1 1175 0 0 125 ' || rc=1
+    cleanup_sandbox "$sb"; return "$rc"
+}
+it "CPU offline에도 누적 합계를 유지하고 재online 표본의 사용량 급증을 막는다" _test_cpu_hotplug_keeps_cumulative_totals
+
 _test_proot_sysdata_files() {
     local sb; sb=$(make_sandbox); _setup_hostinfo_sandbox "$sb"
     _hostinfo_once "$sb" || { cleanup_sandbox "$sb"; return 1; }
@@ -401,8 +447,78 @@ EOF
     assert_output_contains "$plain" "^uid=$(id -u) euid=$(id -u)$" || rc=1
     assert_output_contains "$plain" '^model=none$' || rc=1
     assert_output_contains "$plain" '^fs=none$' || rc=1
-    assert_output_contains "$plain" '^net=EACCES$' || rc=1
+    assert_output_contains "$plain" '^net=\(EACCES\|ENOENT\)$' || rc=1
     assert_output_contains "$plain" '^rx=none$' || rc=1
+    cleanup_sandbox "$sb"; return "$rc"
+}
+
+_test_shim_missing_net_readonly() {
+    local sb; sb=$(make_sandbox); _setup_hostinfo_sandbox "$sb"
+    _build_real_shim || { cleanup_sandbox "$sb"; return 1; }
+    mkdir -p "$sb/bridge/net/usix-hostinfo-test/statistics"
+    echo 67890 > "$sb/bridge/net/usix-hostinfo-test/statistics/rx_bytes"
+    cat > "$sb/reader.c" << 'EOF'
+#include <errno.h>
+#include <fcntl.h>
+#include <stdio.h>
+#include <sys/stat.h>
+#include <unistd.h>
+
+static const char *path = "/sys/class/net/usix-hostinfo-test/statistics/rx_bytes";
+
+static void show(const char *tag, int fd)
+{
+    char buf[32] = "";
+    ssize_t n = fd < 0 ? -1 : read(fd, buf, sizeof(buf) - 1);
+    printf("%s=%s", tag, n > 0 ? buf : "fail\n");
+    if (fd >= 0) close(fd);
+}
+
+int main(void)
+{
+    char buf[32];
+    struct stat st;
+    FILE *f = fopen(path, "r");
+    printf("fopen=%s", f && fgets(buf, sizeof(buf), f) ? buf : "fail\n");
+    if (f) fclose(f);
+    show("open", open(path, O_RDONLY));
+    show("openat", openat(AT_FDCWD, path, O_RDONLY));
+    printf("access=%d\n", access(path, R_OK));
+    printf("faccessat=%d\n", faccessat(AT_FDCWD, path, R_OK, 0));
+    printf("stat=%d\n", stat(path, &st));
+    printf("fstatat=%d\n", fstatat(AT_FDCWD, path, &st, 0));
+    /* 원래 경로는 없지만 브리지에는 있다. 쓰기·생성·자르기는 대체하면 안 된다. */
+    int write_flags[] = { O_WRONLY, O_RDWR, O_RDONLY | O_TRUNC, O_RDONLY | O_CREAT };
+    int allowed = 0;
+    for (unsigned i = 0; i < sizeof(write_flags) / sizeof(write_flags[0]); ++i) {
+        int fd = open(path, write_flags[i], 0600);
+        if (fd >= 0) { ++allowed; close(fd); }
+    }
+    const char *write_modes[] = { "r+", "w", "a" };
+    for (unsigned i = 0; i < sizeof(write_modes) / sizeof(write_modes[0]); ++i) {
+        f = fopen(path, write_modes[i]);
+        if (f) { ++allowed; fclose(f); }
+    }
+    allowed += access(path, W_OK) == 0;
+    allowed += faccessat(AT_FDCWD, path, X_OK, 0) == 0;
+    printf("writes=%d\n", allowed);
+    return 0;
+}
+EOF
+    clang -O2 -o "$sb/reader" "$sb/reader.c" || { cleanup_sandbox "$sb"; return 1; }
+    local preload="$PREFIX/lib/hostinfo_proc.so${LD_PRELOAD:+:$LD_PRELOAD}" out plain tag rc=0
+    out=$(TERMUX_XFCE_HOSTINFO_BTOP=1 TERMUX_XFCE_HOSTINFO="$sb/bridge" LD_PRELOAD="$preload" "$sb/reader")
+    plain=$(TERMUX_XFCE_HOSTINFO_BTOP=0 TERMUX_XFCE_HOSTINFO="$sb/bridge" LD_PRELOAD="$preload" "$sb/reader")
+    for tag in fopen open openat; do
+        assert_output_contains "$out" "^$tag=67890$" || rc=1
+        assert_output_contains "$plain" "^$tag=fail$" || rc=1
+    done
+    for tag in access faccessat stat fstatat; do
+        assert_output_contains "$out" "^$tag=0$" || rc=1
+        assert_output_contains "$plain" "^$tag=-1$" || rc=1
+    done
+    assert_output_contains "$out" '^writes=0$' || rc=1
+    assert_file_contains "$sb/bridge/net/usix-hostinfo-test/statistics/rx_bytes" '^67890$' || rc=1
     cleanup_sandbox "$sb"; return "$rc"
 }
 
@@ -433,6 +549,7 @@ if ! command -v clang >/dev/null 2>&1; then
 else
     it "clang으로 훅과 네트워크 도우미를 빌드하고 소스가 그대로면 다시 빌드하지 않는다" _test_build_shim_once
     it "설치 뒤 clang이 생기면 첫 exec가 훅을 빌드해 붙이고 데몬이 볼 PID를 남긴다" _test_exec_builds_and_attaches_shim
+    it "btop의 ENOENT 네트워크 경로는 읽기 API만 브리지로 열고 쓰기와 일반 모드는 보존한다" _test_shim_missing_net_readonly
     if (read -r _ < /proc/stat) 2>/dev/null; then
         skip "훅의 /proc 대체 열기 (이 환경은 /proc/stat을 직접 읽을 수 있다)"
     else

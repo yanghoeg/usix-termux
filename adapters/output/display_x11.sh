@@ -27,7 +27,7 @@ fi
 # ─── X11 세션 중복 감지: X 소켓 또는 세션 프로세스가 남아 있으면 다이얼로그 ───
 _EXISTING_SOCK=$(ls "${TMPDIR}/.X11-unix/X"* 2>/dev/null | head -1)
 _EXISTING_XFCE=$(pgrep -x xfce4-session 2>/dev/null | head -1 || echo "")
-_EXISTING_TX11=$(pgrep -f "termux-x11 :" 2>/dev/null | head -1 || echo "")
+_EXISTING_TX11=$(pgrep -f '(^|/)termux-x11( com\.termux\.x11)? :[0-9]+([.][0-9]+)?( |$)' 2>/dev/null | head -1 || echo "")
 
 if [ -n "$_EXISTING_SOCK" ] || [ -n "$_EXISTING_XFCE" ] || [ -n "$_EXISTING_TX11" ]; then
     if [ -z "$_EXISTING_TX11" ] || [ -z "$_EXISTING_XFCE" ]; then
@@ -83,6 +83,15 @@ FRAG
 
 display_emit_server_start() {
     cat << 'FRAG'
+# Only clean up a failed start after this invocation has taken ownership.
+# A signal while the existing-session dialog is open must leave that session up.
+for _cmd in termux-x11 xdotool timeout; do
+    command -v "$_cmd" >/dev/null 2>&1 || {
+        echo "ERROR: $_cmd 없음. X11 설치를 확인하세요." >&2
+        exit 1
+    }
+done
+_X11_START_OWNED=true
 _kill_display_session
 
 termux-wake-lock || { echo "ERROR: wake lock을 획득할 수 없습니다." >&2; exit 1; }
@@ -91,20 +100,43 @@ termux-wake-lock || { echo "ERROR: wake lock을 획득할 수 없습니다." >&2
 # 띄운 번호를 그대로 확정한다(ls|head 재스캔 금지 — 남의/죽은 소켓 선택 방지)
 TX11_PID=""
 DISPLAY_NUM=""
+_x11_display_ready() {
+    DISPLAY="$1" timeout 2 xdotool getdisplaygeometry >/dev/null 2>&1
+}
 for _DTRY in 0 1 2 3; do
+    _socket="${TMPDIR}/.X11-unix/X${_DTRY}"
+    _lock="${TMPDIR}/.X${_DTRY}-lock"
+    if [ -e "$_socket" ] || [ -e "$_lock" ]; then
+        # Leave an active display (or a live lock owner still starting) alone.
+        if _x11_display_ready ":${_DTRY}"; then
+            continue
+        fi
+        _lock_pid=""
+        [ ! -r "$_lock" ] || read -r _lock_pid < "$_lock" || true
+        case "$_lock_pid" in
+            ""|*[!0-9]*) ;;
+            *) kill -0 "$_lock_pid" 2>/dev/null && continue ;;
+        esac
+        rm -f -- "$_socket" "$_lock" || exit 1
+    fi
     termux-x11 :${_DTRY} 2>/dev/null &
     TX11_PID=$!
+    _display_ready=false
     for _w in 1 2 3 4 5; do
-        [ -e "${TMPDIR}/.X11-unix/X${_DTRY}" ] && break
+        kill -0 "$TX11_PID" 2>/dev/null || break
+        if [ -S "$_socket" ] && _x11_display_ready ":${_DTRY}" && kill -0 "$TX11_PID" 2>/dev/null; then
+            _display_ready=true
+            break
+        fi
         sleep 1
     done
-    if [ -e "${TMPDIR}/.X11-unix/X${_DTRY}" ]; then
+    if [ "$_display_ready" = true ]; then
         DISPLAY_NUM=$_DTRY
         printf '%s\t%s\n' "$TX11_PID" "termux-x11" > "$SESSION_STATE_DIR/display.pid"
         printf '%s\n' "$_DTRY" > "$SESSION_STATE_DIR/display-num"
         break
     fi
-    kill $TX11_PID 2>/dev/null || true
+    kill "$TX11_PID" 2>/dev/null || true
     TX11_PID=""
 done
 
