@@ -21,6 +21,7 @@ declare -A SUITES=(
     [adapters]="${SCRIPT_DIR}/test_adapters.sh"
     [adapters_deb]="${SCRIPT_DIR}/test_adapters_deb.sh"
     [display_wayland]="${SCRIPT_DIR}/test_display_wayland.sh"
+    [display_lock_regressions]="${SCRIPT_DIR}/test_display_lock_regressions.sh"
     [input_interactive]="${SCRIPT_DIR}/test_input_interactive.sh"
     [domain_termux]="${SCRIPT_DIR}/test_domain_termux.sh"
     [domain_xfce]="${SCRIPT_DIR}/test_domain_xfce.sh"
@@ -35,6 +36,7 @@ declare -A SUITES=(
     [modern_install]="${SCRIPT_DIR}/test_modern_install.sh"
     [review_regressions]="${SCRIPT_DIR}/test_review_regressions.sh"
     [review_install_fixes]="${SCRIPT_DIR}/test_review_install_fixes.sh"
+    [review_install_stability]="${SCRIPT_DIR}/test_review_install_stability.sh"
     [review_all_parent]="${SCRIPT_DIR}/test_review_all_parent.sh"
     [desktop_review]="${SCRIPT_DIR}/test_desktop_review.sh"
     [review_followup]="${SCRIPT_DIR}/test_review_followup.sh"
@@ -44,7 +46,7 @@ declare -A SUITES=(
 
 # 실행할 스위트 결정
 if [ $# -eq 0 ]; then
-    selected_suites=("ports" "adapters" "adapters_deb" "display_wayland" "input_interactive" "domain_termux" "domain_xfce" "domain_proot" "domain_locale_ko" "force_gettext" "app_installer" "prun_ld_preload" "prun_runtime" "hostinfo" "install_matrix" "e2e_install" "modern_install" "review_regressions" "review_install_fixes" "review_all_parent" "desktop_review" "review_followup" "review_applied_fixes")
+    selected_suites=("ports" "adapters" "adapters_deb" "display_wayland" "display_lock_regressions" "input_interactive" "domain_termux" "domain_xfce" "domain_proot" "domain_locale_ko" "force_gettext" "app_installer" "prun_ld_preload" "prun_runtime" "hostinfo" "install_matrix" "e2e_install" "modern_install" "review_regressions" "review_install_fixes" "review_install_stability" "review_all_parent" "desktop_review" "review_followup" "review_applied_fixes")
 else
     selected_suites=("$@")
 fi

@@ -135,6 +135,32 @@ EOF
 }
 it "CPU offline에도 누적 합계를 유지하고 재online 표본의 사용량 급증을 막는다" _test_cpu_hotplug_keeps_cumulative_totals
 
+_test_clock_rollback_keeps_cumulative_totals() {
+    local sb; sb=$(make_sandbox); _setup_hostinfo_sandbox "$sb"
+    PATH="$sb/fakebin:$PATH" HOSTINFO_DIR="$sb/out" HOSTINFO_CPU_ROOT="$sb/cpu" \
+        "$_BASH" -s -- "$PREFIX/bin/termux-xfce-hostinfo" "$sb" << 'EOF'
+source <(sed '/^case "${1:-start}" in/,$d' "$1")
+sb="$2"
+mkdir -p "$OUT"
+BTIME=100
+unset EPOCHREALTIME
+EPOCHREALTIME=110.000000; _tick
+EPOCHREALTIME=111.000000; _tick
+cp "$OUT/stat" "$sb/before"; cp "$OUT/uptime" "$sb/uptime-before"
+# Android의 자동 시각 보정처럼 wall clock이 뒤로 가도 누적값은 줄어들면 안 된다.
+EPOCHREALTIME=109.000000; _tick
+cp "$OUT/stat" "$sb/rollback"; cp "$OUT/uptime" "$sb/uptime-rollback"
+EPOCHREALTIME=112.000000; _tick
+cp "$OUT/stat" "$sb/recovered"
+EOF
+    local rc=0
+    cmp -s "$sb/before" "$sb/rollback" || { echo "[ASSERT] 시계 역행으로 CPU 누적값이 바뀌었다" >&2; rc=1; }
+    cmp -s "$sb/uptime-before" "$sb/uptime-rollback" || { echo "[ASSERT] 시계 역행으로 uptime이 줄었다" >&2; rc=1; }
+    assert_file_contains "$sb/recovered" '^cpu  2050 0 0 350 ' || rc=1
+    cleanup_sandbox "$sb"; return "$rc"
+}
+it "자동 시각 보정으로 시계가 역행해도 CPU·uptime 누적값을 보존한다" _test_clock_rollback_keeps_cumulative_totals
+
 _test_proot_sysdata_files() {
     local sb; sb=$(make_sandbox); _setup_hostinfo_sandbox "$sb"
     _hostinfo_once "$sb" || { cleanup_sandbox "$sb"; return 1; }
@@ -522,6 +548,16 @@ EOF
     cleanup_sandbox "$sb"; return "$rc"
 }
 
+_test_shim_denied_net_without_counter() {
+    local sb; sb=$(make_sandbox)
+    clang -O2 "$SCRIPT_DIR/test_hostinfo_proc.c" -o "$sb/hook-tests" -ldl || {
+        cleanup_sandbox "$sb"; return 1;
+    }
+    local rc=0
+    "$sb/hook-tests" "$sb/absent-bridge" || rc=$?
+    cleanup_sandbox "$sb"; return "$rc"
+}
+
 # 실기기 전용: Android 16 netstats(StatsResult getIfaceStats(String))에서 실제 카운터를 받는다
 _test_real_net_helper() {
     local sb; sb=$(make_sandbox); _setup_hostinfo_sandbox "$sb"
@@ -550,6 +586,7 @@ else
     it "clang으로 훅과 네트워크 도우미를 빌드하고 소스가 그대로면 다시 빌드하지 않는다" _test_build_shim_once
     it "설치 뒤 clang이 생기면 첫 exec가 훅을 빌드해 붙이고 데몬이 볼 PID를 남긴다" _test_exec_builds_and_attaches_shim
     it "btop의 ENOENT 네트워크 경로는 읽기 API만 브리지로 열고 쓰기와 일반 모드는 보존한다" _test_shim_missing_net_readonly
+    it "btop의 막힌 네트워크에 카운터가 없으면 읽기 API 모두 ENOENT로 처리한다" _test_shim_denied_net_without_counter
     if (read -r _ < /proc/stat) 2>/dev/null; then
         skip "훅의 /proc 대체 열기 (이 환경은 /proc/stat을 직접 읽을 수 있다)"
     else

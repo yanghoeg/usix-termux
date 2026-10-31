@@ -764,6 +764,8 @@ _put() {
 _tick() {
     local now w n c t v s d last lines="" tb=0 ti=0 up stat sd
     now=${EPOCHREALTIME/./}
+    # 자동 시각 보정으로 wall clock이 뒤로 가도 누적 CPU·uptime 값은 줄이지 않는다.
+    (( now < PREV )) && now=$PREV
     w=$(( now - PREV ))
     read -r last < "$CPU_ROOT/possible" || last=0
     last=${last##*-}

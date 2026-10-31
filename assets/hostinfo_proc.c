@@ -32,12 +32,17 @@ static int btop_mode(void)
     return v && strcmp(v, "1") == 0;
 }
 
+static int btop_net(const char *path)
+{
+    return btop_mode() && path && strncmp(path, "/sys/class/net/", 15) == 0;
+}
+
 /* Android은 같은 sysfs 통계도 기기마다 EACCES 또는 ENOENT로 숨긴다.
  * ENOENT 대체는 btop의 네트워크 sysfs 경로로 한정한다. */
 static int bridged_error(const char *path, int error)
 {
     return error == EACCES ||
-        (error == ENOENT && btop_mode() && path && strncmp(path, "/sys/class/net/", 15) == 0);
+        (error == ENOENT && btop_net(path));
 }
 
 /* 막힌 /proc 항목이나 (btop 모드) /sys/class/net 아래 경로면 alt에 대체 경로를 채우고 1을 돌려준다 */
@@ -48,7 +53,7 @@ static int bridged(const char *path, char alt[PATH_MAX])
 
     if (!path || !dir || !*dir)
         return 0;
-    if (btop_mode() && strncmp(path, "/sys/class/net/", 15) == 0)
+    if (btop_net(path))
         return snprintf(alt, PATH_MAX, "%s/net/%s", dir, path + 15) < PATH_MAX;
     /* hostinfo_net이 쓰는 proc_net/dev — htop 네트워크 미터·psutil·ifconfig가 /proc/net/dev를 읽는다 */
     if (strncmp(path, "/proc/net/", 10) == 0)
@@ -81,7 +86,7 @@ FILE *fopen(const char *path, const char *mode)
         return f;
     g = real(alt, mode);
     if (!g)
-        errno = error;
+        errno = btop_net(path) ? ENOENT : error;
     return g;
 }
 
@@ -101,7 +106,7 @@ static int open_bridged(int dirfd, const char *path, int flags, mode_t mode)
         return fd;
     fd = real(dirfd, alt, flags, mode);
     if (fd < 0)
-        errno = error;
+        errno = btop_net(path) ? ENOENT : error;
     return fd;
 }
 
@@ -149,7 +154,7 @@ static int access_bridged(int dirfd, const char *path, int mode, int flags)
         return rc;
     rc = real(dirfd, alt, mode, flags);
     if (rc != 0)
-        errno = error;
+        errno = btop_net(path) ? ENOENT : error;
     return rc;
 }
 

@@ -279,7 +279,14 @@ else
     _cfg_proot_user="${PROOT_USER:-$_existing_proot_user}"
 fi
 
-cat > "$_cfg_file" << EOF
+# Stage beside the destination so an interrupted write or failed rename leaves
+# the saved installation usable. Follow an existing symlink without replacing it.
+_cfg_target="$_cfg_file"
+if [ -L "$_cfg_target" ]; then
+    _cfg_target=$(readlink -f -- "$_cfg_target")
+fi
+_cfg_staged=$(mktemp "${_cfg_target}.XXXXXX")
+cat > "$_cfg_staged" << EOF || { rm -f -- "$_cfg_staged"; exit 1; }
 # Termux XFCE 설치 설정 — 자동 생성 ($(date '+%Y-%m-%d'))
 PROOT_DISTRO="${_cfg_proot_distro}"
 PROOT_USER="${_cfg_proot_user}"
@@ -291,9 +298,13 @@ EOF
 # PRUN_RUNTIME은 사용자가 직접 켜는 값이라 기존 값이 있을 때만 보존한다.
 if [ -n "$_existing_prun_runtime" ]; then
     printf '# prun 런타임: proot(기본) 또는 chroot-ng (App Installer에서 설치)\nPRUN_RUNTIME="%s"\n' \
-        "$_existing_prun_runtime" >> "$_cfg_file"
+        "$_existing_prun_runtime" >> "$_cfg_staged" || { rm -f -- "$_cfg_staged"; exit 1; }
 fi
-chmod 600 "$_cfg_file"
+chmod 600 "$_cfg_staged" && mv -fT -- "$_cfg_staged" "$_cfg_target" || {
+    rm -f -- "$_cfg_staged"
+    exit 1
+}
+unset _cfg_target _cfg_staged
 
 # -----------------------------------------------------------------------------
 # 11. Storage 권한

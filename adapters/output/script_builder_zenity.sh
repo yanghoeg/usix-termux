@@ -53,11 +53,10 @@ _cleanup_failed_start() {
         _kill_display_session
         termux-wake-unlock 2>/dev/null || true
     fi
-    # X11 시작 잠금(fd 9)은 백그라운드로 띄운 세션 프로세스도 물려받아 세션 내내 남는다.
-    # 정리를 마친 뒤 직접 풀어야 다음 실행이 기존 세션 다이얼로그까지 간다.
-    if [ "${_DISPLAY_SERVER:-x11}" = x11 ]; then
-        flock -u 9 2>/dev/null || true
-    fi
+    # Both display backends pass fd 9 to their background workers. Release the
+    # startup lock explicitly so a later invocation can recover a failed desktop
+    # even while its server/supervisor is still alive.
+    flock -u 9 2>/dev/null || true
     exit "$rc"
 }
 trap _cleanup_failed_start EXIT
