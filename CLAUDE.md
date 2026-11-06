@@ -126,6 +126,9 @@ Wayland의 아래 알려진 차단 문제도 남아 있다.
 - Claude Code 핀 2.1.286 `/login` 검증 완료 — 사인인 URL → 브라우저 인증 → 터미널 복귀 →
   인증 후 실제 요청까지 정상. 환경·셸 프로필 어디에도 토큰이 없어 결과가 가려지지 않은
   조건. 회귀 시 롤백: `app_rollback_claude_code 2.1.261`
+- Claude Code 핀 2.1.311 (2026-11-06 상향, npm `stable` 채널) — `app_upgrade_claude_code`로
+  백업·교체·스모크 통과, 래퍼 경유 `claude -p` 실제 요청 정상(환경 토큰 없음).
+  `/login` 재인증 2026-11-06 확인. 회귀 시 롤백: `app_rollback_claude_code 2.1.286`
 - codex 핀 0.159.3 검증 완료 (`d2fefe0` 커밋 메시지의 "실기기 검증 미실시"는 그 시점 기준,
   이후 완료) — `app_upgrade codex` 실행 시 sha256 2건(본체·code-mode 헬퍼) 검증 통과,
   래퍼 경유 `codex --version` = 0.159.3, `codex doctor` **20 ok / 0 fail**(DNS·TLS·websocket·
