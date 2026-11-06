@@ -134,6 +134,10 @@ Wayland의 아래 알려진 차단 문제도 남아 있다.
   회귀 시 롤백은 본체·code-mode 헬퍼의 sha256이 둘 다 등록된 버전으로만 가능하다.
   0.153.4는 본체 sha256만 등록돼 있으므로 헬퍼 해시를 검증·등록하기 전에는
   `CODEX_PIN_VERSION`을 해당 버전으로 되돌려 재설치할 수 없다.
+- codex 핀 0.167.0 (2026-11-06 상향) — `app-install.sh install codex`로 sha256 2건 검증·설치,
+  manifest 기록, 래퍼 경유 `codex --version` = 0.167.0, `codex doctor` **20 ok / 0 fail**.
+  `daemon_auto_start` 기본값은 여전히 true라 래퍼 주입 유지(적용 시 false 확인).
+  TUI 대화·Code Mode spawn은 미실측. 회귀 시 롤백: `CODEX_PIN_VERSION="0.159.3"`
 - codex의 `exec` 기본 sandbox는 Android에서 못 뜬다 — `sandbox failed: Permission denied
   (os error 13)`. 0.153.4 때부터 같은 bwrap/Android 비호환이며 이번 상향과 무관하다.
   명령을 실제로 돌리려면 `-c sandbox_mode=danger-full-access` 같은 해제가 필요하다.
