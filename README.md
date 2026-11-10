@@ -36,6 +36,14 @@ Run in **Android Termux**, with ARM64 (`aarch64`) as the primary target. With no
 options, the installer asks for a distro, a proot username when needed, and a display
 backend. The default backend is Termux:X11 + XFCE.
 
+> **Android 17 / One UI 9:** Termux and its add-on APKs (Termux:X11, Termux:Boot)
+> target an old SDK, and One UI 9 may refuse to install them. Already installed apps
+> keep working. If installation is refused, turn off the app compatibility policies
+> in Developer options and allow the app; [termux-app#5297](https://github.com/termux/termux-app/issues/5297)
+> reports `2026090201` and `2026010720`. Use the GitHub or F-Droid build: the Google
+> Play build targets a newer SDK, so Android 17's local network permission blocks LAN
+> access such as SSH ([termux-app#5165](https://github.com/termux/termux-app/issues/5165)).
+
 ```bash
 # Download, clone the repository and start interactive setup
 curl -sL https://raw.githubusercontent.com/yanghoeg/usix-termux/main/install.sh | bash
@@ -183,7 +191,7 @@ Measured on a Galaxy Z Fold6 (SM-F956N):
 
 Known limits:
 - On this device's Termux:X11, the xMeM-patched Turnip fails to create an X11 swapchain (native Termux Turnip does too), so on-screen Vulkan uses Turnip 24.2.6 and vkcube does not start.
-- Battery statistics have no source on Android and stay empty. Network counters need the Android 16 `netstats` interface (verified on this device), and proot guests cannot list network interfaces, so their btop network panel stays empty. `/proc/net/dev` reports only bytes and packets; error and drop columns are 0.
+- Battery statistics have no source on Android and stay empty. Network counters need the Android 16/17 `netstats` interface (verified on this device), and proot guests cannot list network interfaces, so their btop network panel stays empty. `/proc/net/dev` reports only bytes and packets; error and drop columns are 0.
 - iftop and nethogs capture packets through raw sockets and need root.
 - Path translation uses only seccomp traps; there is no LD_PRELOAD fast path.
 - The guest has no persistent D-Bus session, so GSettings (dconf) changes are not saved. File open and save dialogs work.
@@ -424,6 +432,20 @@ then run from a PC connected over ADB.
 
 ```bash
 adb shell "/system/bin/device_config put activity_manager max_phantom_processes 2147483647"
+```
+
+### App memory limit (Android 17+)
+
+Android 17 limits each app's memory based on the device's total RAM. Termux runs XFCE,
+proot and other programs in one app, so a heavy session can be killed by this limit.
+The exit description then contains `MemoryLimiter:AnonSwap`. Check the limit and
+exempt Termux from a PC connected over ADB. The commands follow the
+[Android 17 documentation](https://developer.android.com/about/versions/17/behavior-changes-all#app-memory-limits)
+and have not been tested here. Run `id -u` in Termux to get the UID.
+
+```bash
+adb shell am memory-limiter status
+adb shell am memory-limiter ignore <termux-uid>
 ```
 
 ### Disable Battery Optimization

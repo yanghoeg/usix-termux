@@ -36,6 +36,14 @@ Android 기기의 Termux에서 **XFCE 데스크탑 환경**을 자동 설치하�
 실행하면 배포판, 필요한 경우 proot 사용자 이름, 디스플레이 백엔드를 묻습니다.
 기본 백엔드는 Termux:X11 + XFCE입니다.
 
+> **Android 17 / One UI 9:** Termux와 애드온 APK(Termux:X11, Termux:Boot)는 오래된 SDK를
+> 대상으로 해서 One UI 9에서 설치가 거부될 수 있습니다. 이미 설치된 앱은 그대로 동작합니다.
+> 설치가 거부되면 개발자 옵션의 앱 호환성 정책을 끄고 앱을 허용하세요.
+> [termux-app#5297](https://github.com/termux/termux-app/issues/5297)에서는 `2026090201`,
+> `2026010720`을 보고했습니다. GitHub 또는 F-Droid 빌드를 쓰세요. Google Play 빌드는 새 SDK를
+> 대상으로 해서 Android 17의 로컬 네트워크 권한 때문에 SSH 같은 LAN 접속이 막힙니다
+> ([termux-app#5165](https://github.com/termux/termux-app/issues/5165)).
+
 ```bash
 # 저장소를 자동으로 clone한 뒤 대화형 설치 시작
 curl -sL https://raw.githubusercontent.com/yanghoeg/usix-termux/main/install.sh | bash
@@ -179,7 +187,7 @@ Galaxy Z Fold6(SM-F956N)에서 잰 값은 다음과 같습니다.
 
 남은 한계도 있습니다.
 - 이 기기의 Termux:X11에서는 xMeM 패치 Turnip의 X11 스왑체인 생성이 실패합니다(네이티브 Termux Turnip도 같음). 그래서 Vulkan 화면 출력은 Turnip 24.2.6을 쓰고, vkcube는 실행되지 않습니다.
-- 배터리 통계는 Android에 원천이 없어 비어 있습니다. 네트워크 카운터는 Android 16의 `netstats` 형식에서만 확인했고(이 기기), proot 게스트는 네트워크 인터페이스를 볼 수 없어 btop 네트워크 칸이 비어 있습니다. `/proc/net/dev`에는 바이트·패킷 수만 있고 에러·드롭 열은 0입니다.
+- 배터리 통계는 Android에 원천이 없어 비어 있습니다. 네트워크 카운터는 Android 16·17의 `netstats` 형식에서만 확인했고(이 기기), proot 게스트는 네트워크 인터페이스를 볼 수 없어 btop 네트워크 칸이 비어 있습니다. `/proc/net/dev`에는 바이트·패킷 수만 있고 에러·드롭 열은 0입니다.
 - iftop·nethogs는 raw 소켓으로 패킷을 잡으므로 root가 필요합니다.
 - 경로 번역은 seccomp 트랩만 쓰고 LD_PRELOAD 속도 계층은 없습니다.
 - 게스트에는 상주 D-Bus 세션이 없어 GSettings(dconf) 설정이 저장되지 않습니다. 파일 열기·저장 대화상자는 정상입니다.
@@ -411,6 +419,19 @@ Android 12 이상에서는 백그라운드 프로세스 제한으로 세션이 �
 
 ```bash
 adb shell "/system/bin/device_config put activity_manager max_phantom_processes 2147483647"
+```
+
+### 앱 메모리 한도 (Android 17+)
+
+Android 17은 기기 전체 RAM에 따라 앱마다 메모리 한도를 둡니다. Termux는 XFCE, proot 등을
+한 앱 안에서 실행하므로 무거운 세션이 이 한도 때문에 종료될 수 있습니다. 이때 종료 사유에
+`MemoryLimiter:AnonSwap`이 남습니다. PC에서 ADB로 연결한 뒤 한도를 확인하고 Termux를 제외하세요.
+명령은 [Android 17 문서](https://developer.android.com/about/versions/17/behavior-changes-all#app-memory-limits)를
+따른 것이며 여기서는 시험하지 않았습니다. UID는 Termux에서 `id -u`로 확인합니다.
+
+```bash
+adb shell am memory-limiter status
+adb shell am memory-limiter ignore <termux-uid>
 ```
 
 ### 배터리 최적화 해제

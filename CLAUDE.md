@@ -182,8 +182,9 @@ Wayland의 아래 알려진 차단 문제도 남아 있다.
   - 네트워크 카운터: `/proc/net/dev`·`/sys/class/net`·netlink `RTM_GETLINK`가 모두 막혀 있어, TrafficStats가 쓰는
     시스템 서비스 `netstats`의 `getIfaceStats`(트랜잭션 12, 권한 불필요)를 `hostinfo_net`(`assets/hostinfo_net.c`)이
     부른다. getifaddrs에 보이는 인터페이스마다 `net/<if>/statistics/{rx,tx}_bytes`(btop)와 `proc_net/dev`
-    (`/proc/net/dev` 형식 — htop 네트워크 미터·psutil·ifconfig, 에러·드롭 열은 0)를 쓴다. Android 16 모듈은
-    `StatsResult getIfaceStats(String)`이다(SM-F956N에서 jar의 트랜잭션 상수와 실제 호출로 확인). 응답 모양(널 아님·
+    (`/proc/net/dev` 형식 — htop 네트워크 미터·psutil·ifconfig, 에러·드롭 열은 0)를 쓴다. Android 16·17 모듈은
+    `StatsResult getIfaceStats(String)`이다(SM-F956N에서 jar의 트랜잭션 상수와 실제 호출로 확인, Android 17/One UI 9는
+    2026-11-10 실제 호출로 재확인). 응답 모양(널 아님·
     크기 36·long 4개)이 다르면 쓰지 않으므로, Android 13~15 모듈의 `long getIfaceStats(String, int)`는 0으로
     남는다(실기기 미검증)
     - `libbinder_ndk.so`는 절대경로(`/system/lib64`)로 dlopen한다 — 이름만 쓰면 RUNPATH의 libandroid-stub 가짜가 잡힌다
