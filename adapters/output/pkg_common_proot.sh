@@ -15,6 +15,13 @@ source "$_PROOT_COMMON_DIR/pkg_common_termux.sh"
 # -----------------------------------------------------------------------------
 
 proot_install() {
+    if [ "$1" = archlinux ] && [ "$(uname -m)" = aarch64 ] &&
+       command -v python3 >/dev/null 2>&1 &&
+       python3 -c 'import proot_distro' 2>/dev/null; then
+        _proot_install_arch_arm64
+        return $?
+    fi
+
     # proot-distro 버그 우회: 내부에서 `TERMUX_LDPRELOAD="${LD_PRELOAD-}"`로
     # LD_PRELOAD를 캡처한 뒤, run_proot_cmd 마지막에
     #   [ -n "$TERMUX_LDPRELOAD" ] && export LD_PRELOAD="$TERMUX_LDPRELOAD"
@@ -26,6 +33,23 @@ proot_install() {
         proot-distro install "$1"
     fi
 }
+
+_proot_install_arch_arm64() (
+    # The v5 installer resolves a bare "archlinux" to the amd64 OCI image.
+    # Use the ARM64 rootfs and checksum from Termux's v4.34.2 Arch plug-in.
+    local stage archive
+    if ! command -v wget >/dev/null 2>&1 && ! command -v curl >/dev/null 2>&1; then
+        pkg_install curl || return 1
+    fi
+    stage=$(mktemp -d "${TMPDIR:-$PREFIX/tmp}/arch-rootfs.XXXXXX") || return 1
+    trap 'rm -rf -- "$stage"' EXIT
+    source "$_PROOT_COMMON_DIR/../../app-installer/lib/fetch.sh" || return 1
+    archive="$stage/archlinux-aarch64.tar.xz"
+    fetch_verified \
+        "https://github.com/termux/proot-distro/releases/download/v4.29.0/archlinux-aarch64-pd-v4.29.0.tar.xz" \
+        "$archive" "08d74365213e647c558e561b0a2a7afb6fa3dfe345a1994c62ccac5af1a1cdc6" || return 1
+    proot-distro install --name archlinux "$archive"
+)
 
 proot_remove() {
     proot-distro remove "$1" 2>/dev/null || true

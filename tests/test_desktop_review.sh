@@ -157,6 +157,52 @@ _test_desktop_parent_migration() {
 }
 it 'parent upgrade migration uses the common helper and preserves native menu entries' _test_desktop_parent_migration
 
+_test_legacy_launchers_bind_before_default_changes() {
+    local sb legacy; sb=$(make_sandbox); trap 'cleanup_sandbox "$_DESKTOP_REVIEW_SB"' EXIT
+    _desktop_review_setup "$sb"
+    source "$_DESKTOP_REVIEW_ROOT/domain/termux_env.sh"
+    ui_warn() { printf '%s\n' "$*" >&2; }
+    legacy="$PREFIX/share/applications/legacy.desktop"
+    printf '[Desktop Entry]\nName=Legacy\nExec=bash -c "prun-gui \\"Legacy App\\" -- app &"\n' > "$legacy"
+    ln -s "$legacy" "$HOME/Desktop/legacy.desktop"
+    printf '#!%s\n_PRUN_RUNTIME_ENV="${PRUN_RUNTIME:-}"\n' "$BASH" > "$PREFIX/bin/prun"
+    chmod +x "$PREFIX/bin/prun"
+    _bind_existing_proot_launchers ubuntu alice
+    printf 'PROOT_DISTRO=archlinux\nPROOT_USER=bob\n' > "$HOME/.config/termux-xfce/config"
+    grep -Fq 'Exec=env PRUN_DISTRO=ubuntu PRUN_USER=alice bash -c "prun-gui' "$legacy"
+    grep -Fxq '# termux-xfce-prun' "$PREFIX/bin/prun"
+    [ -L "$HOME/Desktop/legacy.desktop" ]
+    if PROOT_DISTRO=archlinux PROOT_USER=bob desktop_is_registered_proot legacy; then return 1; fi
+    PROOT_DISTRO=ubuntu PROOT_USER=alice desktop_is_registered_proot legacy
+}
+it 'a proot-only switch binds escaped legacy launchers and refreshes the old prun' _test_legacy_launchers_bind_before_default_changes
+
+_test_proot_launchers_keep_independent_contexts() {
+    local sb menu; sb=$(make_sandbox); trap 'cleanup_sandbox "$_DESKTOP_REVIEW_SB"' EXIT
+    _desktop_review_setup "$sb"
+    menu="$PREFIX/share/applications"
+    printf 'PROOT_DISTRO=ubuntu\nPROOT_USER=alice\n' > "$HOME/.config/termux-xfce/config"
+    PROOT_DISTRO=ubuntu PROOT_USER=alice desktop_register_proot demo Demo 'demo %U' demo Utility
+    PROOT_DISTRO=ubuntu PROOT_USER=alice desktop_is_registered_proot demo
+    if PROOT_DISTRO=archlinux PROOT_USER=bob desktop_is_registered_proot demo; then return 1; fi
+
+    PROOT_DISTRO=archlinux PROOT_USER=bob desktop_register_proot demo Demo 'demo %U' demo Utility
+    grep -Fxq 'Exec=env PRUN_DISTRO=ubuntu PRUN_USER=alice prun-gui "Demo" -- demo %U' "$menu/demo.desktop"
+    grep -Fxq 'Exec=env PRUN_DISTRO=archlinux PRUN_USER=bob prun-gui "Demo" -- demo %U' "$menu/demo--archlinux--bob.desktop"
+    PROOT_DISTRO=archlinux PROOT_USER=bob desktop_is_registered_proot demo
+    PROOT_DISTRO=archlinux PROOT_USER=bob desktop_remove_proot demo
+    [ ! -e "$menu/demo--archlinux--bob.desktop" ]
+    [ ! -e "$HOME/Desktop/demo--archlinux--bob.desktop" ]
+    PROOT_DISTRO=ubuntu PROOT_USER=alice desktop_is_registered_proot demo
+    [ -f "$HOME/Desktop/demo.desktop" ]
+
+    printf 'Name=Native\nExec=native-example\n' > "$menu/example.desktop"
+    PROOT_DISTRO=archlinux PROOT_USER=bob desktop_register_proot example Example example example Utility
+    PROOT_DISTRO=archlinux PROOT_USER=bob desktop_remove_proot example
+    grep -Fxq 'Exec=native-example' "$menu/example.desktop"
+}
+it 'matching proot app IDs coexist across containers and neither registration nor removal touches a native launcher' _test_proot_launchers_keep_independent_contexts
+
 _test_desktop_migration_keeps_prun_gui_launchers() {
     local sb inode before; sb=$(make_sandbox); trap 'cleanup_sandbox "$_DESKTOP_REVIEW_SB"' EXIT
     _desktop_review_setup "$sb"
@@ -256,7 +302,7 @@ _test_cp2menu_import_and_failed_copy() {
     script_build_cp2menu "$PREFIX/bin/cp2menu"
     bash "$PREFIX/bin/cp2menu"
     destination="$PREFIX/share/applications/libreoffice-writer.desktop"
-    grep -q '^Exec=prun-gui "Writer 100%%" -- libreoffice --writer %U$' "$destination"
+    grep -q '^Exec=env PRUN_DISTRO=archlinux PRUN_USER=user prun-gui "Writer 100%%" -- libreoffice --writer %U$' "$destination"
     before=$(cat "$destination")
     TEST_SELECTED="$destination" bash "$PREFIX/bin/cp2menu"
     assert_eq "$before" "$(cat "$destination")"
@@ -305,7 +351,7 @@ _test_cp2menu_falls_back_to_installed_helper() {
     selected="$TEST_ROOTFS/usr/share/applications/libreoffice-writer.desktop"
     _desktop_review_gui "$selected"
     bash "$PREFIX/bin/cp2menu"
-    grep -q '^Exec=prun-gui "Writer 100%%" -- libreoffice --writer %U$' "$PREFIX/share/applications/libreoffice-writer.desktop"
+    grep -q '^Exec=env PRUN_DISTRO=archlinux PRUN_USER=user prun-gui "Writer 100%%" -- libreoffice --writer %U$' "$PREFIX/share/applications/libreoffice-writer.desktop"
     grep -q -- '--info.*복사 완료' "$TEST_DIALOG_LOG"
 }
 it 'cp2menu uses the helper installed by setup when the checkout is gone' _test_cp2menu_falls_back_to_installed_helper

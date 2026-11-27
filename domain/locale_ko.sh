@@ -179,7 +179,7 @@ _install_dbus_propagate_autostart() {
 [Desktop Entry]
 Type=Application
 Name=Env & DBus propagate
-Exec=bash -lc 'command -v dbus-update-activation-environment >/dev/null 2>&1 && dbus-update-activation-environment --all || true'
+Exec=dbus-update-activation-environment --all
 X-GNOME-Autostart-enabled=true
 NoDisplay=true
 EOF

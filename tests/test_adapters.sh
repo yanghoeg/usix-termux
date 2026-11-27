@@ -205,9 +205,7 @@ _test_sb_start_xfce_no_socket_rescan() {
     local sb; sb=$(make_sandbox)
     local out="${sb}/startXFCE"
     script_build_start_xfce "$out"
-    # display_emit_session_detect의 _EXISTING_SOCK=... 재스캔(다른 목적: 기존 세션 감지)은
-    # 유지되므로, display_emit_server_start가 재스캔으로 DISPLAY_NUM을 다시 뽑아내던
-    # `DISPLAY_NUM=$(basename ...)` 패턴만 특정해서 검사
+    # The display number comes from the server we started.
     assert_file_not_contains "$out" 'DISPLAY_NUM=\$(basename'
     assert_file_contains "$out" 'DISPLAY_NUM=$_DTRY'
     bash -n "$out"
@@ -326,21 +324,19 @@ _test_sb_start_xfce_tracks_session_pids() {
 }
 it "세션 PID를 기록하고 시작 실패 시 정리한다" _test_sb_start_xfce_tracks_session_pids
 
-_test_sb_start_xfce_reaps_orphans_gracefully() {
+_test_sb_start_xfce_stops_recorded_processes() {
     source "${ADAPTER_DIR}/display_x11.sh"
     source "${ADAPTER_DIR}/script_builder_zenity.sh"
     local sb; sb=$(make_sandbox)
     local out="${sb}/startXFCE"
     script_build_start_xfce "$out"
-    # 과거의 무차별 강제 종료 형태는 쓰지 않는다
-    assert_file_not_contains "$out" "killall -9"
-    assert_file_not_contains "$out" "pkill -9 -f conky"
-    # 고아는 정확한 이름(-x) + graceful(SIGTERM→SIGKILL)으로만 정리한다
-    assert_file_contains "$out" "pkill -TERM -x"
-    assert_file_contains "$out" "pkill -KILL -x"
+    assert_file_not_contains "$out" 'pkill\|killall\|am force-stop'
+    assert_file_contains "$out" '_session_pidfile_target'
+    assert_file_contains "$out" 'kill -TERM -- "\$target"'
+    assert_file_contains "$out" 'kill -KILL -- "\$target"'
     cleanup_sandbox "$sb"
 }
-it "고아 프로세스를 무차별 강제 종료 대신 정확한 이름+graceful로 정리한다" _test_sb_start_xfce_reaps_orphans_gracefully
+it "세션에 기록한 프로세스에만 TERM 신호를 보내고 필요하면 KILL로 종료한다" _test_sb_start_xfce_stops_recorded_processes
 
 _test_sb_start_xfce_am_start_force() {
     source "${ADAPTER_DIR}/display_x11.sh"
@@ -373,7 +369,7 @@ _test_sb_kill_checks_pkg_running() {
     local sb; sb=$(make_sandbox)
     local out="${sb}/kill_display_session"
     script_build_kill_display "$out"
-    assert_file_contains "$out" "\[a\]pt|\[a\]pt-get|\[d\]pkg|\[n\]ala"
+    assert_file_contains "$out" "pgrep -x 'apt|apt-get|dpkg|nala'"
     cleanup_sandbox "$sb"
 }
 it "패키지 설치 중 여부를 확인한다" _test_sb_kill_checks_pkg_running
@@ -495,35 +491,15 @@ _test_display_common_sourced_by_both_adapters() {
 }
 it "display_x11.sh와 display_wayland.sh가 display_common.sh를 source한다" _test_display_common_sourced_by_both_adapters
 
-_test_display_common_x11_emits_bare_kill_orphans() {
-    grep -qx '    _kill_orphans' \
-        <<< "$( source "${ADAPTER_DIR}/display_x11.sh"; display_emit_kill_session )"
+_test_display_common_shares_managed_cleanup() {
+    local x11 wayland
+    x11=$( source "${ADAPTER_DIR}/display_x11.sh"; display_emit_kill_session )
+    wayland=$( source "${ADAPTER_DIR}/display_wayland.sh"; display_emit_kill_session )
+    assert_eq "$x11" "$wayland"
+    grep -Fq '_kill_pidfile "$SESSION_STATE_DIR/$file.pid"' <<< "$x11"
+    ! grep -Eq 'pkill|killall|am force-stop' <<< "$x11"
 }
-it "display_x11.sh가 방출하는 텍스트는 인자 없는 _kill_orphans를 호출한다" _test_display_common_x11_emits_bare_kill_orphans
-
-_test_display_common_wayland_emits_kill_orphans_labwc() {
-    grep -qx '    _kill_orphans labwc' \
-        <<< "$( source "${ADAPTER_DIR}/display_wayland.sh"; display_emit_kill_session )"
-}
-it "Wayland 종료는 구버전 labwc를 -x 목록에 넣는다" _test_display_common_wayland_emits_kill_orphans_labwc
-
-# comm은 15바이트에서 잘리고 argv[0]을 그대로 담으므로, 긴 이름이나 절대경로로
-# 실행되는 Plasma/KWin 프로세스는 pkill -x로 절대 매칭되지 않는다(-f 목록이어야 한다).
-_test_display_common_wayland_cmdline_matched_names() {
-    local frag
-    frag=$( source "${ADAPTER_DIR}/display_wayland.sh"; display_emit_kill_session )
-    grep -qx '    local cmdline_names="kwin_wayland kwin_wayland_wrapper startplasma-wayland plasmashell kded6"' \
-        <<< "$frag" \
-    && grep -q 'pkill -TERM -f "(\^|/)\$_n( |\\\$)"' <<< "$frag" \
-    && ! grep -q '_kill_orphans .*startplasma-wayland' <<< "$frag"
-}
-it "15자 초과/절대경로 프로세스는 -x가 아니라 커맨드라인으로 정리한다" _test_display_common_wayland_cmdline_matched_names
-
-_test_display_common_x11_has_empty_cmdline_names() {
-    grep -qx '    local cmdline_names=""' \
-        <<< "$( source "${ADAPTER_DIR}/display_x11.sh"; display_emit_kill_session )"
-}
-it "X11은 커맨드라인 매칭 목록이 비어 있다(0회 순회)" _test_display_common_x11_has_empty_cmdline_names
+it "X11과 Wayland는 기록한 세션에만 공통 종료 로직을 적용한다" _test_display_common_shares_managed_cleanup
 
 _test_display_common_emit_has_no_placeholder() {
     ! grep -q '__DISPLAY_COMMON' <<< "$( source "${ADAPTER_DIR}/display_x11.sh"; display_emit_kill_session )" \

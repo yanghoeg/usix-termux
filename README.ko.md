@@ -144,6 +144,9 @@ GPU 가속은 App Installer에서 선택해 설치합니다. Termux:X11용 `gpu_
 런처에서 관리하며 모든 셸에 강제로 적용하지 않습니다. X11의 GTK4 호환 설정인
 `GSK_RENDERER=cairo`는 유지합니다.
 
+App Installer에서 `gpu_native`를 제거하면 다음 XFCE 시작부터 X11 가속이 꺼집니다.
+다른 앱과 공유하는 Mesa 및 Vulkan 패키지는 유지됩니다.
+
 proot 앱에는 `gpu_proot`를 따로 설치합니다. 배포판 Turnip은 데스크톱용 DRM(msm)만
 지원하므로, Termux glibc 저장소의 KGSL Turnip 드라이버(버전·SHA-256 고정)를 컨테이너에
 넣고 Zink에는 배포판 Mesa를 그대로 씁니다. `vulkaninfo`로 KGSL의 Turnip을 확인한 뒤에만
@@ -194,14 +197,10 @@ Galaxy Z Fold6(SM-F956N)에서 잰 값은 다음과 같습니다.
 
 ## Termux API 연동
 
-native 구성 시 `termux-api` 패키지를 설치합니다. Termux:API, Termux:Float,
-Termux:Widget, Termux:Boot APK는 다운로드 후 Android 설치 화면을 엽니다. 각 화면에서
-설치를 완료하세요. `--proot-only`는 이 단계를 생략합니다.
-
-이 설치기가 받는 컴패니언 APK는 GitHub 빌드입니다. Termux와 컴패니언은 같은 출처의
-서명을 사용해야 하므로 F-Droid Termux를 쓴다면 해당 컴패니언도 F-Droid에서 설치하세요.
-[Termux 설치 안내](https://github.com/termux/termux-app#installation)를 참고하세요.
-Anland의 standard/compatible 선택은 이 컴패니언 APK 선택과 별개입니다.
+native 구성 시 `termux-api` 패키지를 설치합니다. GitHub판 Termux에서는 Termux:API,
+Termux:Float, Termux:Widget, Termux:Boot APK를 내려받아 Android 설치 화면을 엽니다.
+F-Droid판 Termux에서는 해당 애드온의 F-Droid 페이지를 엽니다. `--proot-only`는 이
+단계를 생략합니다. [Termux 설치 안내](https://github.com/termux/termux-app#installation).
 
 ### 자동 활성화
 
@@ -263,10 +262,10 @@ proot 한글 입력기(`korean_proot`)는 컨테이너 안에 별도의 로케�
 
 ## App Installer
 
-추가 앱·시스템 도구·Termux API 도구를 탭 기반 GUI로 설치/제거합니다:
+GUI에서 추가 앱·시스템 도구·Termux API 도구를 설치하거나 제거합니다.
 
 ```bash
-app-installer          # 전체 (탭: 앱 | 시스템 | Termux API | Wine)
+app-installer          # 전체 분류
 app-installer wine     # Wine 앱만
 ```
 
@@ -280,10 +279,10 @@ bash app-installer/app-install.sh status vlc
 bash app-installer/app-install.sh remove vlc
 ```
 
-- **탭 기반 UI** — 앱 / 시스템 / Termux API / Wine 탭으로 분류
-- **검색** — 이름/설명 타이핑으로 즉시 필터링 (yad notebook, zenity 폴백)
+- **검색** — YAD 목록에서 분류를 확인하고 이름을 검색합니다. YAD가 없으면 Zenity를 사용합니다.
 - **Termux native 우선** — GIMP, Inkscape, Thunderbird 등은 네이티브 설치
 - **proot 자동 라우팅** — LibreOffice, VS Code, DBeaver 등은 proot 내부 설치
+- **proot 런처** — 기본 배포판을 변경해도 앱을 설치할 때 선택한 배포판과 사용자로 실행합니다.
 - **업그레이드** — 설치된 Claude Code, Codex CLI, Notion에는 *업그레이드*가 표시됩니다.
   Claude Code는 고정 버전으로 갱신하며 다운로드나 버전 스모크 검사에 실패하면 백업으로
   복원할 수 있습니다. 이 검사는 `/login`을 확인하지 않습니다. Codex는 자체 고정 버전으로
@@ -479,7 +478,7 @@ usix-termux/
 ├── docs/                         ← Anland 구성과 제약
 ├── tests/                        ← 자동화 테스트와 설치 매트릭스 안내
 └── app-installer/                ← 앱 설치 GUI (Git Submodule)
-    ├── install.sh                ← yad notebook 탭 GUI
+    ├── install.sh                ← 검색 가능한 YAD 목록
     ├── app-install.sh            ← list/install/remove/status CLI
     └── domain/installers/        ← 앱별 핸들러 (제거 전용 항목 포함)
 ```

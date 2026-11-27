@@ -7,7 +7,7 @@ source "$PROJECT_DIR/adapters/output/display_wayland.sh"
 
 describe 'Anland — APK selection and hardware preflight'
 _test_variants() {
-    unset ANLAND_APK_VARIANT TERMUX_APP__APK_RELEASE
+    unset ANLAND_APK_VARIANT TERMUX_APP__APK_RELEASE TERMUX_APK_RELEASE
     assert_eq compatible "$(_anland_apk_variant)"
     assert_eq standard "$(TERMUX_APP__APK_RELEASE=GITHUB _anland_apk_variant)"
     assert_eq compatible "$(TERMUX_APP__APK_RELEASE=F_DROID _anland_apk_variant)"
@@ -174,6 +174,7 @@ sleep() {
     fi
 }
 CLOCK
+    display_emit_kill_session >> "$sb/launcher"
     display_emit_session_launch >> "$sb/launcher"
     local rc=0
     bash "$sb/launcher" > "$sb/output" 2>&1 || rc=$?

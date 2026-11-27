@@ -42,56 +42,72 @@ setup_termux_shortcuts() {
     _setup_conky_autostart
 }
 
+_valid_apk() {
+    [ -s "$1" ] && unzip -tqq "$1" >/dev/null 2>&1 &&
+        unzip -Z1 "$1" 2>/dev/null | grep -Fx AndroidManifest.xml >/dev/null
+}
+
 termux_download_and_open_apk() {
-    local apk_url="$1" apk_filename="$2"
+    local apk_url="$1" apk_filename="$2" cache_policy="${3:-versioned}"
     local dl_dir="$HOME/storage/downloads"
-    local apk_path="${dl_dir}/${apk_filename}"
-    local apk_tmp="${apk_path}.part.$$"
 
     if [ ! -d "$dl_dir" ]; then
         dl_dir="$HOME"
-        apk_path="${dl_dir}/${apk_filename}"
-        apk_tmp="${apk_path}.part.$$"
-        ui_warn "storage/downloads 없음 — ${apk_path} 에 저장합니다."
+        ui_warn "storage/downloads 없음 — $dl_dir/$apk_filename 에 저장합니다."
     fi
+    local apk_path="$dl_dir/$apk_filename" apk_tmp
 
-    # APK는 ZIP 컨테이너이므로 PK magic과 non-empty를 최소 검증한다.
-    # 기존 파일도 검증해 중단된 다운로드를 설치 화면으로 넘기지 않는다.
-    if [ -s "$apk_path" ] && [ "$(head -c 2 "$apk_path" 2>/dev/null)" = "PK" ]; then
+    if [ "$cache_policy" = versioned ] && _valid_apk "$apk_path"; then
         ui_warn "APK가 이미 다운로드되어 있습니다: ${apk_path}"
     else
-        rm -f "$apk_path" "$apk_tmp"
+        apk_tmp=$(mktemp "$dl_dir/.apk.XXXXXX") || {
+            ui_warn "APK 저장용 임시 파일을 만들지 못했습니다: $dl_dir"
+            return 0
+        }
         if ! wget -q "$apk_url" -O "$apk_tmp"; then
-            rm -f "$apk_tmp"
+            rm -f -- "$apk_tmp"
             ui_warn "APK 다운로드 실패: ${apk_url}"
             return 0
         fi
-        if [ ! -s "$apk_tmp" ] || [ "$(head -c 2 "$apk_tmp" 2>/dev/null)" != "PK" ]; then
-            rm -f "$apk_tmp"
+        if ! _valid_apk "$apk_tmp"; then
+            rm -f -- "$apk_tmp"
             ui_warn "APK 형식 검증 실패: ${apk_url}"
             return 0
         fi
-        chmod 600 "$apk_tmp"
-        mv "$apk_tmp" "$apk_path"
+        if ! mv -fT -- "$apk_tmp" "$apk_path"; then
+            rm -f -- "$apk_tmp"
+            ui_warn "APK를 저장하지 못했습니다: $apk_path"
+            return 0
+        fi
     fi
 
     termux-open "$apk_path" 2>/dev/null || \
         ui_warn "APK 자동 열기 실패 — 수동으로 설치하세요: ${apk_path}"
 }
 
-
-# setup_termux_x11_apk: display_x11.sh:display_setup_apk()로 이동됨
+_setup_termux_companion_apk() {
+    local package="$1" url="$2" filename="$3"
+    case "${TERMUX_APP__APK_RELEASE:-${TERMUX_APK_RELEASE:-}}" in
+        GITHUB) termux_download_and_open_apk "$url" "$filename" ;;
+        F_DROID)
+            local page="https://f-droid.org/packages/$package/"
+            termux-open-url "$page" 2>/dev/null ||
+                ui_warn "F-Droid에서 $package 설치: $page"
+            ;;
+        *) ui_warn "$package 애드온은 현재 Termux와 같은 배포처에서 설치하세요." ;;
+    esac
+}
 
 setup_termux_api_apk() {
-    termux_download_and_open_apk \
+    _setup_termux_companion_apk com.termux.api \
         'https://github.com/termux/termux-api/releases/download/v0.53.0/termux-api-app_v0.53.0+github.debug.apk' \
-        'termux-api.apk'
+        'termux-api-v0.53.0-github.apk'
 }
 
 setup_termux_float_apk() {
-    termux_download_and_open_apk \
+    _setup_termux_companion_apk com.termux.window \
         'https://github.com/termux/termux-float/releases/download/v0.17.0/termux-float-app_v0.17.0+github.debug.apk' \
-        'termux-float.apk'
+        'termux-float-v0.17.0-github.apk'
 }
 
 setup_termux_widget() {
@@ -104,16 +120,16 @@ setup_termux_widget() {
         ui_warn "startXFCE 단축키가 없습니다. setup_termux_shortcuts 를 먼저 실행하세요."
     fi
 
-    termux_download_and_open_apk "$apk_url" 'termux-widget.apk'
+    _setup_termux_companion_apk com.termux.widget "$apk_url" 'termux-widget-v0.15.0-github.apk'
 }
 
 # Termux:Boot — 기기 부팅 시 ~/.termux/boot/ 안의 스크립트를 실행하는 애드온.
 # APK 설치 후 최소 한 번 앱을 열어야 활성화된다(Android 제약).
 setup_termux_boot_apk() {
     ui_info "Termux:Boot 설치 (부팅 시 서비스 자동 기동)"
-    termux_download_and_open_apk \
+    _setup_termux_companion_apk com.termux.boot \
         'https://github.com/termux/termux-boot/releases/download/v0.8.1/termux-boot-app_v0.8.1+github.debug.apk' \
-        'termux-boot.apk'
+        'termux-boot-v0.8.1-github.apk'
     _setup_termux_boot_script
 }
 
@@ -567,13 +583,17 @@ EOF
 }
 
 _setup_prun() {
-    local bin="$PREFIX/bin/prun"
+    local bin="$PREFIX/bin/prun" stage
+    stage=$(mktemp "$bin.XXXXXX") || return 1
 
     # PROOT_DISTRO는 설치 시 결정된 값을 config에서 읽음
-    cat > "$bin" << 'EOF'
+    if ! cat > "$stage" << 'EOF'
 #!/data/data/com.termux/files/usr/bin/bash
+# termux-xfce-prun
 CONFIG="$HOME/.config/termux-xfce/config"
 _PRUN_RUNTIME_ENV="${PRUN_RUNTIME:-}"
+_PRUN_DISTRO_ENV="${PRUN_DISTRO:-}"
+_PRUN_USER_ENV="${PRUN_USER:-}"
 [ -f "$CONFIG" ] && source "$CONFIG"
 # 실행 시 지정한 PRUN_RUNTIME이 config 값보다 우선한다. 기본은 proot(-distro).
 PRUN_RUNTIME="${_PRUN_RUNTIME_ENV:-${PRUN_RUNTIME:-proot}}"
@@ -586,11 +606,19 @@ _prun_error() {
     exit 1
 }
 
-DISTRO="${PROOT_DISTRO:-}"
+DISTRO="${_PRUN_DISTRO_ENV:-${PROOT_DISTRO:-}}"
 if [ -z "$DISTRO" ]; then
     _prun_error "proot 환경이 설정되지 않았습니다. 설치기에 --distro를 지정하세요."
 fi
-ROOTFS_BASE="$PREFIX/var/lib/proot-distro"
+if [ -n "$_PRUN_DISTRO_ENV$_PRUN_USER_ENV" ]; then
+    case "$_PRUN_DISTRO_ENV" in
+        ubuntu|archlinux) ;;
+        *) _prun_error "지원하지 않는 proot 런처 배포판: $_PRUN_DISTRO_ENV" ;;
+    esac
+    [[ "$_PRUN_USER_ENV" =~ ^[a-zA-Z_][a-zA-Z0-9_-]*$ ]] || _prun_error "잘못된 proot 런처 사용자: $_PRUN_USER_ENV"
+    PROOT_USER="$_PRUN_USER_ENV"
+fi
+ROOTFS_BASE="${PROOT_ROOTFS_BASE:-$PREFIX/var/lib/proot-distro}"
 if [ -d "$ROOTFS_BASE/containers/$DISTRO/rootfs" ]; then
     ROOTFS="$ROOTFS_BASE/containers/$DISTRO/rootfs"
 else
@@ -676,8 +704,14 @@ else
         -- env -u LD_PRELOAD DISPLAY="$DISPLAY" bash --login -c 'exec "$@"' prun "$@"
 fi
 EOF
-
-    chmod +x "$bin"
+    then
+        rm -f -- "$stage"
+        return 1
+    fi
+    if ! chmod 755 "$stage" || ! mv -fT -- "$stage" "$bin"; then
+        rm -f -- "$stage"
+        return 1
+    fi
 }
 
 # termux-xfce-hostinfo: Android Host Info Bridge
@@ -1002,8 +1036,29 @@ _migrate_desktop_to_prun_gui() {
     local f
     for f in "$apps_dir"/*.desktop "$HOME/Desktop"/*.desktop; do
         [ -f "$f" ] || continue
-        desktop_migrate_proot_launcher "$f" || ui_warn "기존 런처를 보존합니다: $f"
+        if ! desktop_migrate_proot_launcher "$f" "${1:-}"; then
+            ui_warn "기존 런처를 보존합니다: $f"
+            [ -z "${1:-}" ] || return 1
+        fi
     done
+}
+
+_bind_existing_proot_launchers() {
+    local PROOT_DISTRO="$1" PROOT_USER="$2" prefix bin="$PREFIX/bin/prun"
+    # A proot-only run may still have our older generated prun command.
+    [ -f "$bin" ] && [ ! -L "$bin" ] || return 0
+    if ! grep -Fxq '# termux-xfce-prun' "$bin"; then
+        grep -Fxq '_PRUN_RUNTIME_ENV="${PRUN_RUNTIME:-}"' "$bin" || return 0
+        _setup_prun || return 1
+        if grep -q '^DESKTOP_HELPER=' "$PREFIX/bin/cp2menu" 2>/dev/null; then
+            _setup_cp2menu || return 1
+        fi
+    fi
+    source "${BASH_SOURCE[0]%/*}/../app-installer/lib/common.sh" || return 1
+    PROOT_USER="${PROOT_USER:-$(_detect_proot_user)}"
+    source "${BASH_SOURCE[0]%/*}/../app-installer/domain/desktop.sh" || return 1
+    prefix=$(_desktop_proot_exec_prefix) || return 1
+    _migrate_desktop_to_prun_gui "$prefix"
 }
 
 _setup_app_installer() {

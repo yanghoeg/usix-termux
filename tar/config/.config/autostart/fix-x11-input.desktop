@@ -11,7 +11,7 @@ Name=Fix X11 Input
 #
 # 영구 해결: Termux:X11 설정 → Keyboard → "Capture DEX meta keys" 활성화
 # 임시 우회: Super+I 단축키로 수동 리셋
-Exec=bash -c 'sleep 5; xdotool key alt 2>/dev/null || true; xdotool key shift 2>/dev/null || true; xdotool key ctrl 2>/dev/null || true; xinput set-button-map "Virtual core pointer" 1 2 3 4 5 6 7 8 9 10 11 12 13 2>/dev/null || true; xset r rate 300 30 2>/dev/null || true; setxkbmap -option 2>/dev/null || true'
+Exec=bash -c "sleep 5; xdotool key alt 2>/dev/null || true; xdotool key shift 2>/dev/null || true; xdotool key ctrl 2>/dev/null || true; xinput set-button-map 'Virtual core pointer' 1 2 3 4 5 6 7 8 9 10 11 12 13 2>/dev/null || true; xset r rate 300 30 2>/dev/null || true; setxkbmap -option 2>/dev/null || true"
 X-GNOME-Autostart-enabled=true
 NoDisplay=true
 StartupNotify=false

@@ -440,8 +440,14 @@ _migrate_remove_actions_plugin() {
 _migrate_dbus_propagate_path() {
     local desktop="$HOME/.config/autostart/00-env-dbus-propagate.desktop"
     [ -f "$desktop" ] || return 0
-    grep -q '/usr/bin/env' "$desktop" 2>/dev/null || return 0
-    sed -i 's|Exec=/usr/bin/env bash|Exec=bash|' "$desktop"
+    local managed="dbus-update-activation-environment --all"
+    local guarded="command -v dbus-update-activation-environment >/dev/null 2>&1 && $managed || true"
+    if grep -Fqx -e "Exec=/usr/bin/env bash -lc '$managed'" \
+                  -e "Exec=bash -lc '$managed'" \
+                  -e "Exec=/usr/bin/env bash -lc '$guarded'" \
+                  -e "Exec=bash -lc '$guarded'" "$desktop"; then
+        sed -i "s#^Exec=.*#Exec=$managed#" "$desktop"
+    fi
 }
 
 # 기존 설치본의 conky autostart Exec 끝 '&' 제거

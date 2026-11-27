@@ -872,16 +872,34 @@ it "_install_base_packages가 set -e 하에서 끝까지 실행된다" _test_ins
 
 describe "display_x11 — display_setup_apk"
 
-# Termux 출처(TERMUX_APK_RELEASE)와 일반판 Termux:X11 설치 여부를 고정한 채 실행
+_apk_fixture() {
+    python3 - "$1" "${2:-new}" <<'PY'
+import sys
+from zipfile import ZipFile
+
+with ZipFile(sys.argv[1], 'w') as apk:
+    apk.writestr('AndroidManifest.xml', sys.argv[2])
+PY
+}
+
+_load_apk_domain() {
+    _load_domain "$1"
+    export TERMUX_APP__APK_RELEASE=GITHUB
+    wget() { _record_call "wget $*"; _apk_fixture "${@: -1}"; }
+    termux-open() { _record_call "termux-open $*"; }
+    termux-open-url() { _record_call "termux-open-url $*"; }
+}
+
+# Termux 출처와 일반판 Termux:X11 설치 여부를 고정한 채 실행
 _run_apk_setup() {
     local release="$1" regular="$2"
     _termux_x11_regular_installed() { [ "$regular" = yes ]; }
-    TERMUX_APK_RELEASE="$release" display_setup_apk
+    TERMUX_APP__APK_RELEASE="$release" display_setup_apk
 }
 
 _test_x11_apk_github_uses_shared_uid() {
     local sb; sb=$(make_sandbox)
-    _load_domain "$sb"
+    _load_apk_domain "$sb"
     mkdir -p "$HOME/storage/downloads"
     termux-open() { _record_call "termux-open $*"; }
     reset_mock_calls
@@ -896,7 +914,7 @@ it "GitHub판 Termux는 큰 코어를 쓰게 하는 sharedUid universal APK를 �
 
 _test_x11_apk_fdroid_uses_regular() {
     local sb; sb=$(make_sandbox)
-    _load_domain "$sb"
+    _load_apk_domain "$sb"
     mkdir -p "$HOME/storage/downloads"
     termux-open() { :; }
     reset_mock_calls
@@ -911,7 +929,7 @@ it "F-Droid판 Termux는 서명이 달라 일반 universal APK를 받는다" _te
 
 _test_x11_apk_github_with_regular_installed_updates_regular() {
     local sb; sb=$(make_sandbox)
-    _load_domain "$sb"
+    _load_apk_domain "$sb"
     mkdir -p "$HOME/storage/downloads"
     termux-open() { :; }
     reset_mock_calls
@@ -926,26 +944,26 @@ _test_x11_apk_github_with_regular_installed_updates_regular() {
 }
 it "일반판이 설치돼 있으면 일반판을 갱신하고 sharedUid 판 전환 방법을 안내한다" _test_x11_apk_github_with_regular_installed_updates_regular
 
-_test_x11_apk_idempotent_when_present() {
+_test_x11_apk_refreshes_cached_nightly() {
     local sb; sb=$(make_sandbox)
-    _load_domain "$sb"
+    _load_apk_domain "$sb"
     mkdir -p "$HOME/storage/downloads"
-    # 이미 다운로드된 상태
-    printf 'PKmock\n' > "$HOME/storage/downloads/termux-x11-universal-debug.apk"
-    termux-open() { _record_call "termux-open $*"; }
+    local apk="$HOME/storage/downloads/termux-x11-universal-debug.apk"
+    _apk_fixture "$apk" old
     reset_mock_calls
 
     _run_apk_setup F_DROID no
 
-    assert_not_called "wget"
+    assert_was_called "wget"
     assert_was_called "termux-open"
+    assert_eq new "$(unzip -p "$apk" AndroidManifest.xml)"
     cleanup_sandbox "$sb"
 }
-it "APK가 이미 있으면 wget 건너뛰고 termux-open만 호출" _test_x11_apk_idempotent_when_present
+it "nightly는 정상 캐시가 있어도 새로 내려받아 연다" _test_x11_apk_refreshes_cached_nightly
 
 _test_x11_apk_replaces_invalid_existing_file() {
     local sb; sb=$(make_sandbox)
-    _load_domain "$sb"
+    _load_apk_domain "$sb"
     mkdir -p "$HOME/storage/downloads"
     printf 'broken\n' > "$HOME/storage/downloads/termux-x11-universal-debug.apk"
     termux-open() { _record_call "termux-open $*"; }
@@ -954,14 +972,30 @@ _test_x11_apk_replaces_invalid_existing_file() {
     _run_apk_setup F_DROID no
 
     assert_was_called "wget"
-    assert_output_contains "$(head -c 2 "$HOME/storage/downloads/termux-x11-universal-debug.apk")" "PK"
+    _valid_apk "$HOME/storage/downloads/termux-x11-universal-debug.apk"
     cleanup_sandbox "$sb"
 }
 it "손상된 기존 APK는 다시 다운로드한다" _test_x11_apk_replaces_invalid_existing_file
 
+_test_x11_apk_rejects_bad_refresh() {
+    local sb; sb=$(make_sandbox)
+    _load_apk_domain "$sb"
+    mkdir -p "$HOME/storage/downloads"
+    local apk="$HOME/storage/downloads/termux-x11-universal-debug.apk"
+    _apk_fixture "$apk" old
+    wget() { printf 'PK' > "${@: -1}"; }
+    reset_mock_calls
+    _run_apk_setup F_DROID no
+    assert_eq old "$(unzip -p "$apk" AndroidManifest.xml)"
+    assert_not_called 'termux-open '
+    if compgen -G "$HOME/storage/downloads/.apk.*"; then return 1; fi
+    cleanup_sandbox "$sb"
+}
+it "손상된 새 nightly는 캐시를 덮어쓰거나 설치 창을 열지 않는다" _test_x11_apk_rejects_bad_refresh
+
 _test_x11_apk_falls_back_to_home_when_no_storage() {
     local sb; sb=$(make_sandbox)
-    _load_domain "$sb"
+    _load_apk_domain "$sb"
     # storage/downloads 없음 → HOME으로 폴백
     [ ! -d "$HOME/storage/downloads" ]
     termux-open() { _record_call "termux-open $*"; }
@@ -1083,14 +1117,14 @@ it "기존 부팅 스크립트를 덮어쓰지 않는다 (멱등)" _test_boot_sc
 
 _test_boot_downloads_apk() {
     local sb; sb=$(make_sandbox)
-    _load_domain "$sb"
+    _load_apk_domain "$sb"
     mkdir -p "$HOME/storage/downloads"
     termux-open() { :; }
     reset_mock_calls
 
     setup_termux_boot_apk
 
-    assert_was_called "termux-boot.apk"
+    assert_was_called 'v0.8.1/termux-boot-app'
     cleanup_sandbox "$sb"
 }
 it "Termux:Boot APK를 내려받는다" _test_boot_downloads_apk
@@ -1113,7 +1147,7 @@ describe "termux_env — setup_termux_api_apk"
 
 _test_api_apk_downloads() {
     local sb; sb=$(make_sandbox)
-    _load_domain "$sb"
+    _load_apk_domain "$sb"
     mkdir -p "$HOME/storage/downloads"
     termux-open() { _record_call "termux-open $*"; }
     reset_mock_calls
@@ -1121,16 +1155,16 @@ _test_api_apk_downloads() {
     setup_termux_api_apk
 
     assert_was_called "wget"
-    assert_was_called "termux-api.apk"
+    assert_was_called "termux-api-v0.53.0-github.apk"
     cleanup_sandbox "$sb"
 }
 it "Termux:API APK를 다운로드한다" _test_api_apk_downloads
 
 _test_api_apk_idempotent() {
     local sb; sb=$(make_sandbox)
-    _load_domain "$sb"
+    _load_apk_domain "$sb"
     mkdir -p "$HOME/storage/downloads"
-    printf 'PKmock\n' > "$HOME/storage/downloads/termux-api.apk"
+    _apk_fixture "$HOME/storage/downloads/termux-api-v0.53.0-github.apk"
     termux-open() { _record_call "termux-open $*"; }
     reset_mock_calls
 
@@ -1142,6 +1176,21 @@ _test_api_apk_idempotent() {
 }
 it "API APK가 이미 있으면 wget 건너뛰고 termux-open만 호출" _test_api_apk_idempotent
 
+_test_api_apk_rejects_zip_header_only() {
+    local sb; sb=$(make_sandbox)
+    _load_apk_domain "$sb"
+    local apk="$HOME/storage/downloads/termux-api-v0.53.0-github.apk"
+    mkdir -p "${apk%/*}"
+    printf 'PK' > "$apk"
+    reset_mock_calls
+    setup_termux_api_apk
+    assert_was_called wget
+    assert_was_called 'termux-open '
+    _valid_apk "$apk"
+    cleanup_sandbox "$sb"
+}
+it "ZIP 헤더만 남은 버전 캐시는 내려받아 교체한다" _test_api_apk_rejects_zip_header_only
+
 # =============================================================================
 # setup_termux_float_apk — APK 다운로드 + 멱등성
 # =============================================================================
@@ -1150,7 +1199,7 @@ describe "termux_env — setup_termux_float_apk"
 
 _test_float_apk_downloads() {
     local sb; sb=$(make_sandbox)
-    _load_domain "$sb"
+    _load_apk_domain "$sb"
     mkdir -p "$HOME/storage/downloads"
     termux-open() { _record_call "termux-open $*"; }
     reset_mock_calls
@@ -1158,16 +1207,16 @@ _test_float_apk_downloads() {
     setup_termux_float_apk
 
     assert_was_called "wget"
-    assert_was_called "termux-float.apk"
+    assert_was_called "termux-float-v0.17.0-github.apk"
     cleanup_sandbox "$sb"
 }
 it "Termux:Float APK를 다운로드한다" _test_float_apk_downloads
 
 _test_float_apk_idempotent() {
     local sb; sb=$(make_sandbox)
-    _load_domain "$sb"
+    _load_apk_domain "$sb"
     mkdir -p "$HOME/storage/downloads"
-    printf 'PKmock\n' > "$HOME/storage/downloads/termux-float.apk"
+    _apk_fixture "$HOME/storage/downloads/termux-float-v0.17.0-github.apk"
     termux-open() { _record_call "termux-open $*"; }
     reset_mock_calls
 
@@ -1178,6 +1227,24 @@ _test_float_apk_idempotent() {
     cleanup_sandbox "$sb"
 }
 it "Float APK가 이미 있으면 wget 건너뛰고 termux-open만 호출" _test_float_apk_idempotent
+
+_test_fdroid_companions_open_matching_pages() {
+    local sb addon; sb=$(make_sandbox)
+    _load_apk_domain "$sb"
+    export TERMUX_APP__APK_RELEASE=F_DROID TERMUX_APK_RELEASE=GITHUB
+    reset_mock_calls
+    setup_termux_api_apk
+    setup_termux_float_apk
+    setup_termux_widget
+    setup_termux_boot_apk
+    for addon in api window widget boot; do
+        assert_was_called "termux-open-url https://f-droid.org/packages/com.termux.$addon/"
+    done
+    assert_not_called wget
+    assert_not_called 'termux-open '
+    cleanup_sandbox "$sb"
+}
+it "F-Droid Termux는 배포처가 일치하는 애드온 페이지를 연다" _test_fdroid_companions_open_matching_pages
 
 # =============================================================================
 # _setup_clipboard_sync — 동기화 스크립트 생성

@@ -169,37 +169,18 @@ _test_startxfce_no_pgrep_c_or_echo_pattern() {
 }
 it "startXFCE에 'pgrep -c ... || echo 0' 버그 패턴이 없다" _test_startxfce_no_pgrep_c_or_echo_pattern
 
-_test_startxfce_dbus_count_is_integer_safe() {
-    # 기능 검사: DBUS_COUNT 계산 라인을 실제로 실행하고
-    # -gt 비교가 integer expected 오류를 내지 않는지 확인
+_test_startxfce_uses_its_own_dbus() {
     local sb; sb=$(make_sandbox)
     _load_domain "$sb"
 
     _setup_start_xfce
     local script="${HOME}/.shortcuts/startXFCE"
 
-    # DBUS_COUNT 계산 + [ -gt ] 분기를 추출해서 실행
-    # pgrep dbus-daemon → 존재하지 않는 프로세스명으로 치환 (매치 0건 재현)
-    local tmp="${sb}/dbus_count_test.sh"
-    {
-        echo 'set -uo pipefail'
-        grep "DBUS_COUNT=" "$script" | head -1 | sed 's/pgrep dbus-daemon/pgrep __definitely_not_a_process__/'
-        echo 'if [ "${DBUS_COUNT:-0}" -gt 1 ]; then echo branch_gt; else echo branch_ok; fi'
-    } > "$tmp"
-
-    local result
-    result=$(bash "$tmp" 2>&1)
-    assert_output_contains "$result" "branch_ok"
-
-    if grep -q "integer expected" <<< "$result"; then
-        echo "[ASSERT] DBUS_COUNT이 'integer expected' 오류 유발" >&2
-        echo "[ASSERT] 실제 출력: $result" >&2
-        return 1
-    fi
-
+    assert_file_not_contains "$script" 'DBUS_COUNT\|pkill.*dbus'
+    assert_file_contains "$script" 'setsid dbus-run-session -- xfce4-session'
     cleanup_sandbox "$sb"
 }
-it "DBUS_COUNT 계산이 매치 0건에서도 integer 비교 안전하다" _test_startxfce_dbus_count_is_integer_safe
+it "XFCE가 자체 D-Bus 세션을 시작하고 기존 세션을 건드리지 않는다" _test_startxfce_uses_its_own_dbus
 
 _test_startxfce_bash_syntax_valid() {
     local sb; sb=$(make_sandbox)
@@ -510,7 +491,7 @@ _test_dbus_propagate_no_usr_bin_env() {
         echo "[ASSERT] /usr/bin/env 경로가 남아있음 — Termux에서 실행 불가" >&2
         return 1
     fi
-    assert_file_contains "$desktop" "Exec=bash"
+    assert_file_contains "$desktop" '^Exec=dbus-update-activation-environment --all$'
 }
 it "dbus-propagate autostart에 /usr/bin/env 경로가 없다" _test_dbus_propagate_no_usr_bin_env
 

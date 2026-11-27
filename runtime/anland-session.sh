@@ -60,9 +60,11 @@ _cleanup() {
           "$SESSION_STATE_DIR/plasma.env"
     if [ "$_daemon_started" = true ]; then
         rm -f "$ANLAND_SOCKET"
-        am force-stop com.anland.termux 2>/dev/null || true
     fi
-    termux-wake-unlock 2>/dev/null || true
+    if [ -f "$SESSION_STATE_DIR/wake-lock" ]; then
+        termux-wake-unlock 2>/dev/null || true
+        rm -f -- "$SESSION_STATE_DIR/wake-lock"
+    fi
     exit "$rc"
 }
 trap _cleanup EXIT

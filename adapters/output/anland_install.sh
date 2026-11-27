@@ -7,7 +7,7 @@ _ANLAND_REPO_ROOT="$(cd "${BASH_SOURCE[0]%/*}/../.." && pwd)"
 _anland_apk_variant() {
     local variant="${ANLAND_APK_VARIANT:-}"
     if [ -z "$variant" ]; then
-        case "${TERMUX_APP__APK_RELEASE:-}" in
+        case "${TERMUX_APP__APK_RELEASE:-${TERMUX_APK_RELEASE:-}}" in
             GITHUB) variant=standard ;;
             *) variant=compatible ;;
         esac

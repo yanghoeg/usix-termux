@@ -145,6 +145,9 @@ model. The launcher owns these settings,
 so they are no longer forced into every shell. `GSK_RENDERER=cairo` remains the
 GTK4 compatibility setting for the X11 session.
 
+Removing `gpu_native` in App Installer disables X11 acceleration on the next
+XFCE start and keeps the Mesa and Vulkan packages shared with other apps.
+
 For container apps, install `gpu_proot` separately. Distro Turnip builds support only
 desktop DRM (msm), so it adds the KGSL Turnip driver from Termux's glibc repository
 (pinned version and SHA-256) to the container, keeps the distro's Mesa for Zink, and
@@ -198,15 +201,11 @@ Known limits:
 
 ## Termux API Integration
 
-The `termux-api` package is installed by the native setup. Termux:API, Termux:Float,
-Termux:Widget and Termux:Boot APKs are downloaded and opened for Android installation;
-complete each dialog. `--proot-only` skips these steps.
-
-The companion APK URLs in this installer point to GitHub builds. Termux and its
-companions must use the same signing source; with F-Droid Termux, install the
-matching companions from F-Droid. See the
+The native setup installs the `termux-api` package. It downloads and opens the
+Termux:API, Termux:Float, Termux:Widget and Termux:Boot APKs for GitHub Termux,
+and opens the corresponding F-Droid pages for F-Droid Termux. Complete those
+installations in Android. `--proot-only` skips these steps.
 [Termux installation guide](https://github.com/termux/termux-app#installation).
-Anland's standard/compatible selection is separate from these companion APKs.
 
 ### Auto-enabled
 
@@ -270,10 +269,10 @@ commands through a Bash login shell, which loads the container profiles; interac
 
 ## App Installer
 
-Install/remove extra apps, system tools, and Termux API tools via a tabbed GUI:
+Install and remove extra apps, system tools, and Termux API tools in the GUI.
 
 ```bash
-app-installer          # Full UI (tabs: Apps | System | Termux API | Wine)
+app-installer          # All categories
 app-installer wine     # Wine apps only
 ```
 
@@ -287,10 +286,10 @@ bash app-installer/app-install.sh status vlc
 bash app-installer/app-install.sh remove vlc
 ```
 
-- **Tabbed UI** — Apps / System / Termux API / Wine tabs
-- **Search** — type to filter by name/description (yad notebook, zenity fallback)
+- **Search** — one list with category labels and name search in YAD, with a Zenity fallback
 - **Termux native first** — GIMP, Inkscape, Thunderbird install as native
 - **proot auto-routing** — LibreOffice, VS Code, DBeaver, etc. install inside proot
+- **proot launchers** — open the distro and user selected at install time, including after a default distro change
 - **Upgrade** — installed Claude Code, Codex CLI and Notion entries offer *Upgrade*.
   Claude Code targets its pinned version and can restore a backup after a failed
   download or version smoke check; this does not test `/login`. Codex targets its own
@@ -493,7 +492,7 @@ usix-termux/
 ├── docs/                         ← Anland setup and limitations
 ├── tests/                        ← automated tests and installation matrix guide
 └── app-installer/                ← extra app GUI (Git Submodule)
-    ├── install.sh                ← yad notebook tabbed GUI
+    ├── install.sh                ← searchable YAD list
     ├── app-install.sh            ← headless list/install/remove/status CLI
     └── domain/installers/        ← per-app handlers (including removal-only entries)
 ```

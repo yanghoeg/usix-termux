@@ -70,6 +70,23 @@ _test_default_uses_proot_distro() {
 }
 it "PRUN_RUNTIME이 없으면 기존처럼 proot-distro로 실행한다" _test_default_uses_proot_distro
 
+_test_bound_launcher_uses_its_own_target() {
+    local sb; sb=$(make_sandbox); _setup_runtime "$sb"
+    printf 'PROOT_DISTRO="ubuntu"\nPROOT_USER="alice"\n' > "$HOME/.config/termux-xfce/config"
+    PRUN_DISTRO=archlinux PRUN_USER=testuser _run_prun libreoffice 'one argument' >/dev/null
+    local log="$sb/proot-distro.log"
+    _assert_log_line "$log" archlinux
+    _assert_log_line "$log" testuser
+    _assert_log_line "$log" 'one argument'
+    if grep -qxF alice "$log"; then return 1; fi
+    printf 'PROOT_DISTRO=""\nPROOT_USER=""\n' > "$HOME/.config/termux-xfce/config"
+    PRUN_DISTRO=archlinux PRUN_USER=testuser _run_prun xeyes >/dev/null
+    _assert_log_line "$log" archlinux
+    if PRUN_DISTRO=archlinux _run_prun xeyes >/dev/null; then return 1; fi
+    cleanup_sandbox "$sb"
+}
+it '기본 배포판 변경이나 native 전환 뒤에도 런처가 지정한 컨테이너와 사용자를 쓴다' _test_bound_launcher_uses_its_own_target
+
 _test_env_selects_chroot_ng() {
     local sb; sb=$(make_sandbox); _setup_runtime "$sb"
     PRUN_RUNTIME=chroot-ng _run_prun xeyes -geometry 10x10 >/dev/null

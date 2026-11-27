@@ -416,7 +416,7 @@ _test_conky_autostart_kept_by_default() {
 it "SKIP_CONKY 미지정이면 conky 자동시작을 건드리지 않는다" _test_conky_autostart_kept_by_default
 
 # =============================================================================
-# _migrate_dbus_propagate_path — /usr/bin/env → bash
+# _migrate_dbus_propagate_path — 직접 D-Bus 명령 실행
 # =============================================================================
 
 describe "xfce_env — _migrate_dbus_propagate_path"
@@ -432,11 +432,11 @@ EOF
 
     _migrate_dbus_propagate_path
 
-    assert_file_contains "${HOME}/.config/autostart/00-env-dbus-propagate.desktop" "Exec=bash"
+    assert_file_contains "${HOME}/.config/autostart/00-env-dbus-propagate.desktop" '^Exec=dbus-update-activation-environment --all$'
     assert_file_not_contains "${HOME}/.config/autostart/00-env-dbus-propagate.desktop" "/usr/bin/env"
     cleanup_sandbox "$sb"
 }
-it "/usr/bin/env를 bash 직접 호출로 변환한다" _test_dbus_propagate_fixes_path
+it "이전 /usr/bin/env 호출을 올바른 Desktop Entry 명령으로 변환한다" _test_dbus_propagate_fixes_path
 
 _test_dbus_propagate_idempotent() {
     local sb; sb=$(make_sandbox)
@@ -448,8 +448,9 @@ Exec=bash -lc 'dbus-update-activation-environment --all'
 EOF
 
     _migrate_dbus_propagate_path
+    _migrate_dbus_propagate_path
 
-    assert_file_contains "${HOME}/.config/autostart/00-env-dbus-propagate.desktop" "Exec=bash"
+    assert_file_contains "${HOME}/.config/autostart/00-env-dbus-propagate.desktop" '^Exec=dbus-update-activation-environment --all$'
     cleanup_sandbox "$sb"
 }
 it "멱등성 — 이미 수정된 경우 건너뛴다" _test_dbus_propagate_idempotent

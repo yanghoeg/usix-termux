@@ -31,24 +31,24 @@ display_get_packages() {
 }
 
 display_emit_kill_session() {
-    # Include labwc to clean up sessions from the old nested-X11 launcher. The
-    # Plasma/KWin processes are started through absolute paths (and two of their
-    # names exceed comm's 15-byte cap), so they go in the command-line list.
-    display_common_emit_kill_session "labwc" \
-        "kwin_wayland kwin_wayland_wrapper startplasma-wayland plasmashell kded6"
+    display_common_emit_kill_session
 }
 
 display_emit_session_detect() {
     cat << 'FRAG'
 _DISPLAY_SERVER=wayland
 export SESSION_STATE_DIR
-_ANLAND_SOCKET="${TMPDIR}/anland/display_daemon.sock"
+exec 9>"$SESSION_STATE_DIR/start.lock" || exit 1
+if ! flock -n 9; then
+    echo "ERROR: 디스플레이 세션이 시작되거나 종료되는 중입니다." >&2
+    exit 1
+fi
 # startplasma-wayland chooses KWin's socket name; the session publishes it here.
 _ANLAND_WAYLAND=""
 [ -r "$SESSION_STATE_DIR/anland-ready" ] &&
     read -r _ANLAND_WAYLAND < "$SESSION_STATE_DIR/anland-ready"
-if [ -r "$SESSION_STATE_DIR/session.pid" ]; then
-    read -r _pid _expected < "$SESSION_STATE_DIR/session.pid" || true
+if _target=$(_session_pidfile_target "$SESSION_STATE_DIR/session.pid"); then
+    _pid="${_target#-}"
     case "${_pid:-}" in
         ''|*[!0-9]*) ;;
         *)
@@ -74,7 +74,7 @@ FRAG
 
 display_emit_server_start() {
     cat << 'FRAG'
-for _cmd in anland anland-compatible startplasma-wayland plasmashell kwin_wayland Xwayland dbus-run-session pipewire wireplumber flock; do
+for _cmd in anland anland-compatible startplasma-wayland plasmashell kwin_wayland Xwayland dbus-run-session pipewire wireplumber flock setsid; do
     command -v "$_cmd" >/dev/null 2>&1 || {
         echo "ERROR: $_cmd 없음. 설치기를 --display wayland로 다시 실행하세요." >&2
         exit 1
@@ -88,15 +88,11 @@ if [ ! -r /dev/kgsl-3d0 ]; then
     echo "ERROR: Anland native에 필요한 Adreno/KGSL 장치를 찾지 못했습니다." >&2
     exit 1
 fi
-exec 9>"$SESSION_STATE_DIR/anland.lock"
-if ! flock -n 9; then
-    echo "ERROR: Anland 세션이 시작되거나 종료되는 중입니다. 잠시 후 다시 실행하세요." >&2
-    exit 1
-fi
 # anland unlinks its socket on startup; do not replace another Anland session.
 _owned_anland_pid="" _owned_anland_name=""
-if [ -r "$SESSION_STATE_DIR/display.pid" ]; then
-    read -r _owned_anland_pid _owned_anland_name < "$SESSION_STATE_DIR/display.pid" || true
+if _owned_target=$(_session_pidfile_target "$SESSION_STATE_DIR/display.pid"); then
+    _owned_anland_pid="${_owned_target#-}"
+    read -r _recorded_pid _owned_anland_name _metadata < "$SESSION_STATE_DIR/display.pid" || true
 fi
 for _other_pid in $(pgrep -x anland 2>/dev/null || true); do
     if [ "$_owned_anland_name" != anland ] || [ "$_other_pid" != "$_owned_anland_pid" ]; then
@@ -107,6 +103,7 @@ done
 _kill_display_session
 _ANLAND_START_OWNED=true
 termux-wake-lock || exit 1
+: > "$SESSION_STATE_DIR/wake-lock" || { termux-wake-unlock; exit 1; }
 rm -f "$SESSION_STATE_DIR/anland-ready"
 mkdir -p "${TMPDIR}/.X11-unix"
 # KWin's Xwayland refuses a socket dir without the sticky bit and then leaves
@@ -130,9 +127,13 @@ _WL_LOG="$HOME/.xfce-wayland.log"
 printf -v _ANLAND_DEADLINE '%(%s)T' -1
 _ANLAND_DEADLINE=$((_ANLAND_DEADLINE + 90))
 ANLAND_STARTUP_DEADLINE=$_ANLAND_DEADLINE \
-    setsid nohup bash "$PREFIX/bin/termux-xfce-anland-session" >"$_WL_LOG" 2>&1 </dev/null &
+    setsid nohup bash "$PREFIX/bin/termux-xfce-anland-session" >"$_WL_LOG" 2>&1 </dev/null 9>&- &
 _ANLAND_PID=$!
-printf '%s\t%s\n' "$_ANLAND_PID" "termux-xfce-anland-session" > "$SESSION_STATE_DIR/session.pid"
+_record_session_pid "$SESSION_STATE_DIR/session.pid" "$_ANLAND_PID" termux-xfce-anland-session group || {
+    kill "$_ANLAND_PID" 2>/dev/null || true
+    echo "ERROR: Anland 세션을 시작하지 못했습니다. 로그: $_WL_LOG" >&2
+    exit 1
+}
 while :; do
     if ! kill -0 "$_ANLAND_PID" 2>/dev/null; then
         echo "ERROR: Anland 세션 시작 실패. 로그: $_WL_LOG" >&2

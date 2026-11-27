@@ -51,11 +51,8 @@ _cleanup_failed_start() {
     trap - EXIT INT TERM
     if [ "$rc" -ne 0 ] && { [ "${_X11_START_OWNED:-false}" = true ] || [ "${_ANLAND_START_OWNED:-false}" = true ]; }; then
         _kill_display_session
-        termux-wake-unlock 2>/dev/null || true
     fi
-    # Both display backends pass fd 9 to their background workers. Release the
-    # startup lock explicitly so a later invocation can recover a failed desktop
-    # even while its server/supervisor is still alive.
+    # Release the startup lock even if a helper opened during setup inherited it.
     flock -u 9 2>/dev/null || true
     exit "$rc"
 }
@@ -80,12 +77,30 @@ HEADER
 _PA_PRELOAD=""
 [ -f /system/lib64/libskcodec.so ] && _PA_PRELOAD="/system/lib64/libskcodec.so"
 
-LD_PRELOAD="$_PA_PRELOAD" pulseaudio --start \
-    --load="module-native-protocol-tcp auth-ip-acl=127.0.0.1 auth-anonymous=1" \
-    --exit-idle-time=-1
-
-LD_PRELOAD="$_PA_PRELOAD" pacmd load-module \
-    module-native-protocol-tcp auth-ip-acl=127.0.0.1 auth-anonymous=1 2>/dev/null || true
+_setup_session_audio() (
+    # Always manage the local daemon through its Unix socket. A terminal
+    # opened in an existing desktop may have inherited the TCP client address.
+    unset PULSE_SERVER
+    export LD_PRELOAD="$_PA_PRELOAD"
+    pulseaudio --start --exit-idle-time=-1 || return 1
+    local modules id name args loaded=false
+    modules=$(pactl list short modules) || return 1
+    while IFS=$'\t' read -r id name args _; do
+        [ "$name" = module-native-protocol-tcp ] || continue
+        case "$args" in
+            'auth-ip-acl=127.0.0.1 auth-anonymous=1')
+                # Replace the listener from earlier generated launchers.
+                pactl unload-module "$id" || return 1
+                ;;
+            'listen=127.0.0.1 auth-anonymous=0 auth-ip-acl=127.0.0.1')
+                loaded=true
+                ;;
+        esac
+    done <<< "$modules"
+    [ "$loaded" = true ] || pactl load-module module-native-protocol-tcp \
+        listen=127.0.0.1 auth-anonymous=0 auth-ip-acl=127.0.0.1 >/dev/null
+)
+_setup_session_audio || echo "WARN: 로컬 PulseAudio 연결을 시작하지 못했습니다." >&2
 
 PULSE
 
@@ -133,7 +148,12 @@ export GSK_RENDERER=cairo
 
 unset MESA_LOADER_DRIVER_OVERRIDE LIBGL_ALWAYS_SOFTWARE TU_DEBUG ZINK_DESCRIPTORS
 unset MESA_NO_ERROR MESA_GL_VERSION_OVERRIDE MESA_GLES_VERSION_OVERRIDE MESA_VK_WSI_PRESENT_MODE
-if [ -n "$GPU_MODEL" ] && [ -f "$PREFIX/share/vulkan/icd.d/freedreno_icd.aarch64.json" ]; then
+_gpu_native_state=''
+if [ -r "$HOME/.config/termux-xfce/gpu-native" ]; then
+    IFS= read -r _gpu_native_state < "$HOME/.config/termux-xfce/gpu-native" || true
+fi
+if [ "$_gpu_native_state" != disabled ] && [ -n "$GPU_MODEL" ] &&
+   [ -f "$PREFIX/share/vulkan/icd.d/freedreno_icd.aarch64.json" ]; then
     # Adreno GPU 감지 → Zink + Turnip
     export MESA_LOADER_DRIVER_OVERRIDE=zink
     export TU_DEBUG=noconform
@@ -157,7 +177,7 @@ if [ -n "$GPU_MODEL" ] && [ -f "$PREFIX/share/vulkan/icd.d/freedreno_icd.aarch64
         unset _zink_err
     fi
 else
-    # llvmpipe 소프트웨어 폴백 (KGSL 미감지)
+    # 사용자 선택 또는 KGSL 미감지 시 llvmpipe 사용
     export LIBGL_ALWAYS_SOFTWARE=1
 fi
 fi # Anland configures its own KGSL environment in its session supervisor.
@@ -186,20 +206,20 @@ HEADER
 
         cat << 'BODY'
 
-if pgrep -f '[a]pt|[a]pt-get|[d]pkg|[n]ala' > /dev/null; then
+if pgrep -x 'apt|apt-get|dpkg|nala' > /dev/null; then
     zenity --info --text="패키지 설치 중입니다. 완료 후 시도하세요."
     exit 1
 fi
 
-# 디스플레이 세션 종료 전 존재 여부 확인
-XFCE_PID=$(pgrep -x xfce4-session 2>/dev/null | head -1)
-DISPLAY_PID=$(pgrep -f '(^|/)(termux-x11|labwc|kwin_wayland|anland)( |$)' 2>/dev/null | head -1)
-
-if [ -z "$XFCE_PID" ] && [ -z "$DISPLAY_PID" ]; then
+if [ ! -d "$SESSION_STATE_DIR" ]; then
     zenity --info --text="실행 중인 세션을 찾을 수 없습니다."
     exit 0
 fi
-
+exec 9>"$SESSION_STATE_DIR/start.lock" || exit 1
+flock -n 9 || {
+    zenity --info --text="세션을 시작하는 중입니다. 잠시 후 시도하세요."
+    exit 1
+}
 _kill_display_session
 BODY
     } > "$output"
@@ -240,6 +260,16 @@ if [ ! -d "$ROOTFS" ]; then
     _cp2menu_error "proot rootfs를 찾을 수 없습니다: $ROOTFS"
     exit 1
 fi
+if [ -z "${PROOT_USER:-}" ]; then
+    for user_home in "$ROOTFS/home"/*/; do
+        [ -d "$user_home" ] || continue
+        user_home="${user_home%/}"
+        [ "${user_home##*/}" != alarm ] || continue
+        PROOT_USER="${user_home##*/}"
+        break
+    done
+    PROOT_USER="${PROOT_USER:-user}"
+fi
 
 action=$(zenity --list --title="cp2menu" --text="작업 선택:" \
     --radiolist --column="" --column="Action" \
@@ -254,7 +284,7 @@ if [[ "$action" == "Copy .desktop file" ]]; then
     [ -z "$selected" ] && exit 0
 
     filename="${selected##*/}"
-    if ! desktop_import_proot "$selected" "$ROOTFS" "$PREFIX/share/applications/$filename"; then
+    if ! desktop_import_proot_into_menu "$selected" "$ROOTFS"; then
         _cp2menu_error "복사 실패: $filename"
         exit 1
     fi

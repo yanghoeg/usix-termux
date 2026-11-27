@@ -305,12 +305,23 @@ _test_retired_browser_and_notion() {
     if app_can_install tor_browser; then return 1; fi
     if app_install_tor_browser >/dev/null 2>&1; then return 1; fi
     if app_is_visible tor_browser; then return 1; fi
-    desktop_register tor Tor old-browser tor Network
+    PROOT_DISTRO=archlinux PROOT_USER=testuser
+    desktop_register_proot tor Tor old-browser tor Network
     app_is_visible tor_browser
     termux_pkg_enable_repo() { return 0; }
     termux_pkg_install() { return 0; }
     app_upgrade_notion
     assert_file_contains "$PREFIX/share/applications/notion.desktop" '^Exec=firefox --new-window https://www.notion.so$'
+    local guest="$sb/rootfs/home/guest/notion"
+    mkdir -p "$guest"
+    printf 'personal notes\n' > "$guest/notes.txt"
+    PROOT_USER=guest
+    _proot_rootfs() { printf '%s\n' "$sb/rootfs"; }
+    has_proot_distro() { return 0; }
+    app_remove_notion
+    [ ! -e "$PREFIX/share/applications/notion.desktop" ]
+    [ ! -e "$HOME/Desktop/notion.desktop" ]
+    assert_eq 'personal notes' "$(cat "$guest/notes.txt")"
     cleanup_sandbox "$sb"
 }
 it 'retired Tor remains removable and Notion can migrate to its native web launcher' _test_retired_browser_and_notion

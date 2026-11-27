@@ -140,7 +140,7 @@ parse_cli_args "$@"
 if ! (
     source "$SCRIPT_DIR/app-installer/lib/input_method.sh" &&
         source "$SCRIPT_DIR/app-installer/domain/desktop.sh" &&
-        declare -F input_method_setup desktop_migrate_proot_launcher desktop_import_proot
+        declare -F input_method_setup desktop_migrate_proot_launcher desktop_import_proot_into_menu _desktop_proot_exec_prefix
 ) >/dev/null 2>&1; then
     echo "[ERROR] app-installer 서브모듈이 없거나 이 설치기와 버전이 맞지 않습니다: git submodule update --init --recursive" >&2
     exit 1
@@ -236,77 +236,6 @@ if [ "${PROOT_ONLY:-false}" != true ]; then
 fi
 
 # -----------------------------------------------------------------------------
-# 10. 설치 설정 저장 (prun, cp2menu가 읽음)
-# -----------------------------------------------------------------------------
-# 기존 설정 병합: 재실행(예: --proot-only)이 사용자가 이미 바꿔둔 값
-# (PROOT_SHELL=zsh 등)을 조용히 되돌리지 않도록, 기존 파일을 메인 셸에
-# source하지 않고 grep/cut으로만 읽어 병합한다.
-_cfg_file="$HOME/.config/termux-xfce/config"
-mkdir -p "$HOME/.config/termux-xfce"
-
-_existing_proot_shell=""
-_existing_display_server=""
-_existing_proot_distro=""
-_existing_proot_user=""
-_existing_prun_runtime=""
-if [ -f "$_cfg_file" ]; then
-    _existing_proot_shell=$(grep -m1 '^PROOT_SHELL=' "$_cfg_file" 2>/dev/null | cut -d= -f2- | tr -d '"' || true)
-    _existing_display_server=$(grep -m1 '^DISPLAY_SERVER=' "$_cfg_file" 2>/dev/null | cut -d= -f2- | tr -d '"' || true)
-    _existing_proot_distro=$(grep -m1 '^PROOT_DISTRO=' "$_cfg_file" 2>/dev/null | cut -d= -f2- | tr -d '"' || true)
-    _existing_proot_user=$(grep -m1 '^PROOT_USER=' "$_cfg_file" 2>/dev/null | cut -d= -f2- | tr -d '"' || true)
-    _existing_prun_runtime=$(grep -m1 '^PRUN_RUNTIME=' "$_cfg_file" 2>/dev/null | cut -d= -f2- | tr -d '"' || true)
-fi
-
-# PROOT_SHELL: 이번 실행에 명시된 값 > 기존 config 값 > bash
-_cfg_proot_shell="${PROOT_SHELL:-${_existing_proot_shell:-bash}}"
-
-# DISPLAY_SERVER: --proot-only 재실행이면서 기존 값이 있으면 유지, 아니면 이번 실행 값
-if [ "${PROOT_ONLY:-false}" = "true" ] && [ -n "$_existing_display_server" ]; then
-    _cfg_display_server="$_existing_display_server"
-else
-    _cfg_display_server="${DISPLAY_SERVER}"
-fi
-
-# native-only를 명시하면 선택을 비운다. 그 외에는 이번 값 또는 기존 값을 사용한다.
-if [ "${SKIP_PROOT:-false}" = true ]; then
-    if [ -n "$_existing_proot_distro" ]; then
-        ui_warn "native 전용으로 전환합니다. 기존 컨테이너는 유지되며 prun 대상 선택은 해제됩니다."
-    fi
-    _cfg_proot_distro=""
-    _cfg_proot_user=""
-else
-    _cfg_proot_distro="${PROOT_DISTRO:-$_existing_proot_distro}"
-    _cfg_proot_user="${PROOT_USER:-$_existing_proot_user}"
-fi
-
-# Stage beside the destination so an interrupted write or failed rename leaves
-# the saved installation usable. Follow an existing symlink without replacing it.
-_cfg_target="$_cfg_file"
-if [ -L "$_cfg_target" ]; then
-    _cfg_target=$(readlink -f -- "$_cfg_target")
-fi
-_cfg_staged=$(mktemp "${_cfg_target}.XXXXXX")
-cat > "$_cfg_staged" << EOF || { rm -f -- "$_cfg_staged"; exit 1; }
-# Termux XFCE 설치 설정 — 자동 생성 ($(date '+%Y-%m-%d'))
-PROOT_DISTRO="${_cfg_proot_distro}"
-PROOT_USER="${_cfg_proot_user}"
-INSTALL_ARCH="$ARCH"
-DISPLAY_SERVER="${_cfg_display_server}"
-# proot 인터랙티브 셸: bash(기본) 또는 zsh (proot에 zsh 설치 후 변경 가능)
-PROOT_SHELL="${_cfg_proot_shell}"
-EOF
-# PRUN_RUNTIME은 사용자가 직접 켜는 값이라 기존 값이 있을 때만 보존한다.
-if [ -n "$_existing_prun_runtime" ]; then
-    printf '# prun 런타임: proot(기본) 또는 chroot-ng (App Installer에서 설치)\nPRUN_RUNTIME="%s"\n' \
-        "$_existing_prun_runtime" >> "$_cfg_staged" || { rm -f -- "$_cfg_staged"; exit 1; }
-fi
-chmod 600 "$_cfg_staged" && mv -fT -- "$_cfg_staged" "$_cfg_target" || {
-    rm -f -- "$_cfg_staged"
-    exit 1
-}
-unset _cfg_target _cfg_staged
-
-# -----------------------------------------------------------------------------
 # 11. Storage 권한
 # -----------------------------------------------------------------------------
 if [ "${PROOT_ONLY:-false}" != "true" ] && [ ! -d "$HOME/storage" ]; then
@@ -399,7 +328,85 @@ if [ "${PROOT_ONLY:-false}" != "true" ]; then
 fi
 
 # -----------------------------------------------------------------------------
-# 15. 완료
+# 15. 설치 설정 저장 (prun, cp2menu가 읽음)
+# -----------------------------------------------------------------------------
+# 기존 설정 병합: 재실행(예: --proot-only)이 사용자가 이미 바꿔둔 값
+# (PROOT_SHELL=zsh 등)을 조용히 되돌리지 않도록, 기존 파일을 메인 셸에
+# source하지 않고 grep/cut으로만 읽어 병합한다.
+_cfg_file="$HOME/.config/termux-xfce/config"
+mkdir -p "$HOME/.config/termux-xfce"
+
+_existing_proot_shell=""
+_existing_display_server=""
+_existing_proot_distro=""
+_existing_proot_user=""
+_existing_prun_runtime=""
+if [ -f "$_cfg_file" ]; then
+    _existing_proot_shell=$(grep -m1 '^PROOT_SHELL=' "$_cfg_file" 2>/dev/null | cut -d= -f2- | tr -d "\"'" || true)
+    _existing_display_server=$(grep -m1 '^DISPLAY_SERVER=' "$_cfg_file" 2>/dev/null | cut -d= -f2- | tr -d "\"'" || true)
+    _existing_proot_distro=$(grep -m1 '^PROOT_DISTRO=' "$_cfg_file" 2>/dev/null | cut -d= -f2- | tr -d "\"'" || true)
+    _existing_proot_user=$(grep -m1 '^PROOT_USER=' "$_cfg_file" 2>/dev/null | cut -d= -f2- | tr -d "\"'" || true)
+    _existing_prun_runtime=$(grep -m1 '^PRUN_RUNTIME=' "$_cfg_file" 2>/dev/null | cut -d= -f2- | tr -d "\"'" || true)
+fi
+
+# PROOT_SHELL: 이번 실행에 명시된 값 > 기존 config 값 > bash
+_cfg_proot_shell="${PROOT_SHELL:-${_existing_proot_shell:-bash}}"
+
+# DISPLAY_SERVER: --proot-only 재실행이면서 기존 값이 있으면 유지, 아니면 이번 실행 값
+if [ "${PROOT_ONLY:-false}" = "true" ] && [ -n "$_existing_display_server" ]; then
+    _cfg_display_server="$_existing_display_server"
+else
+    _cfg_display_server="${DISPLAY_SERVER}"
+fi
+
+# native-only를 명시하면 선택을 비운다. 그 외에는 이번 값 또는 기존 값을 사용한다.
+if [ "${SKIP_PROOT:-false}" = true ]; then
+    if [ -n "$_existing_proot_distro" ]; then
+        ui_warn "native 전용으로 전환합니다. 기존 컨테이너는 유지되며 prun 대상 선택은 해제됩니다."
+    fi
+    _cfg_proot_distro=""
+    _cfg_proot_user=""
+else
+    _cfg_proot_distro="${PROOT_DISTRO:-$_existing_proot_distro}"
+    _cfg_proot_user="${PROOT_USER:-$_existing_proot_user}"
+fi
+
+# Stage beside the destination so an interrupted write or failed rename leaves
+# the saved installation usable. Follow an existing symlink without replacing it.
+_cfg_target="$_cfg_file"
+if [ -L "$_cfg_target" ]; then
+    _cfg_target=$(readlink -f -- "$_cfg_target")
+fi
+_cfg_staged=$(mktemp "${_cfg_target}.XXXXXX")
+cat > "$_cfg_staged" << EOF || { rm -f -- "$_cfg_staged"; exit 1; }
+# Termux XFCE 설치 설정 — 자동 생성 ($(date '+%Y-%m-%d'))
+PROOT_DISTRO="${_cfg_proot_distro}"
+PROOT_USER="${_cfg_proot_user}"
+INSTALL_ARCH="$ARCH"
+DISPLAY_SERVER="${_cfg_display_server}"
+# proot 인터랙티브 셸: bash(기본) 또는 zsh (proot에 zsh 설치 후 변경 가능)
+PROOT_SHELL="${_cfg_proot_shell}"
+EOF
+# PRUN_RUNTIME은 사용자가 직접 켜는 값이라 기존 값이 있을 때만 보존한다.
+if [ -n "$_existing_prun_runtime" ]; then
+    printf '# prun 런타임: proot(기본) 또는 chroot-ng (App Installer에서 설치)\nPRUN_RUNTIME="%s"\n' \
+        "$_existing_prun_runtime" >> "$_cfg_staged" || { rm -f -- "$_cfg_staged"; exit 1; }
+fi
+if [[ "$_existing_proot_distro" == ubuntu || "$_existing_proot_distro" == archlinux ]] &&
+   { [ "$_existing_proot_distro" != "$_cfg_proot_distro" ] || [ "$_existing_proot_user" != "$_cfg_proot_user" ]; }; then
+    _bind_existing_proot_launchers "$_existing_proot_distro" "$_existing_proot_user" || {
+        rm -f -- "$_cfg_staged"
+        exit 1
+    }
+fi
+chmod 600 "$_cfg_staged" && mv -fT -- "$_cfg_staged" "$_cfg_target" || {
+    rm -f -- "$_cfg_staged"
+    exit 1
+}
+unset _cfg_target _cfg_staged
+
+# -----------------------------------------------------------------------------
+# 16. 완료
 # -----------------------------------------------------------------------------
 ui_info "=================================================="
 ui_info "설치가 완료되었습니다!"

@@ -74,6 +74,36 @@ _test_proot_install_skips_if_exists() {
 }
 it "멱등성 — rootfs가 이미 있으면 install을 건너뛴다" _test_proot_install_skips_if_exists
 
+_test_arch_arm64_imports_verified_archive() {
+    local sb test_checksum expected='08d74365213e647c558e561b0a2a7afb6fa3dfe345a1994c62ccac5af1a1cdc6'
+    sb=$(make_sandbox)
+    _load_domain "$sb" archlinux
+    source "$SCRIPT_DIR/../adapters/output/pkg_common_proot.sh"
+    uname() { printf 'aarch64\n'; }
+    python3() { [ "$*" = '-c import proot_distro' ]; }
+    wget() { printf '%s\n' "$4" > "$sb/url"; printf 'rootfs fixture\n' > "$3"; }
+    sha256sum() { printf '%s  %s\n' "$test_checksum" "$1"; }
+    proot-distro() {
+        printf '%s\n' "$@" > "$sb/args"
+        [ "$#" -lt 4 ] || [ -s "$4" ]
+    }
+    test_checksum="$expected" proot_install archlinux
+    assert_file_contains "$sb/url" '^https://github.com/termux/proot-distro/releases/download/v4.29.0/archlinux-aarch64-pd-v4.29.0.tar.xz$'
+    assert_eq $'install\n--name\narchlinux' "$(head -n 3 "$sb/args")"
+    [ ! -e "$(tail -n 1 "$sb/args")" ]
+
+    rm -f "$sb/args"
+    if test_checksum=invalid proot_install archlinux; then return 1; fi
+    [ ! -e "$sb/args" ]
+    proot_install ubuntu
+    assert_eq $'install\nubuntu' "$(cat "$sb/args")"
+    python3() { return 1; }
+    proot_install archlinux
+    assert_eq $'install\narchlinux' "$(cat "$sb/args")"
+    cleanup_sandbox "$sb"
+}
+it 'proot-distro v5 on ARM64 imports the pinned Arch rootfs only after SHA-256 verification' _test_arch_arm64_imports_verified_archive
+
 # --proot-only 모드 회귀: proot-distro 명령이 없는 상태에서 setup_proot_install이
 # PKGS_TERMUX_PROOT를 먼저 설치해야 한다. (이전 버그: rc=127 command not found)
 _test_proot_install_installs_termux_proot_pkgs_when_missing() {

@@ -346,6 +346,25 @@ _test_config_file_records_distro() {
 }
 it "config 파일에 distro/user가 기록되고 권한은 600" _test_config_file_records_distro
 
+_test_failed_proot_setup_leaves_previous_config() {
+    local sb cfg hook rc=0
+    sb=$(make_sandbox)
+    cfg="$sb/home/.config/termux-xfce/config"
+    mkdir -p "${cfg%/*}"
+    printf 'PROOT_DISTRO="ubuntu"\nPROOT_USER="alice"\nPROOT_SHELL="zsh"\n' > "$cfg"
+    cp "$cfg" "$sb/original"
+    hook="$sb/hook.sh"
+    cp "$HOOK_FILE" "$hook"
+    printf '\nsetup_proot_update() { return 42; }\n' >> "$hook"
+    HOME="$sb/home" PREFIX="$sb/usr" _TRACE_FILE="$TRACE_FILE" _INSTALL_HOOK="$hook" \
+        bash "$REPO_ROOT/install.sh" --proot-only --distro archlinux --user bob \
+        > "$sb/output" 2>&1 || rc=$?
+    assert_eq 42 "$rc"
+    cmp "$sb/original" "$cfg"
+    cleanup_sandbox "$sb"
+}
+it "proot 구성이 실패하면 이전 배포판 설정을 유지한다" _test_failed_proot_setup_leaves_previous_config
+
 _test_config_file_no_distro_when_no_proot() {
     local sandbox; sandbox=$(mktemp -d)
     mkdir -p "$sandbox/home/.config/termux-xfce"

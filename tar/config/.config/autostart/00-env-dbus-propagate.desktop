@@ -2,6 +2,6 @@
 Type=Application
 Name=Env & DBus propagate
 # 로그인 직후, 세션 환경을 DBus activation 경로로 재전파
-Exec=bash -lc 'command -v dbus-update-activation-environment >/dev/null 2>&1 && dbus-update-activation-environment --all || true'
+Exec=dbus-update-activation-environment --all
 X-GNOME-Autostart-enabled=true
 NoDisplay=true

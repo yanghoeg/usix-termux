@@ -1,114 +1,87 @@
 #!/data/data/com.termux/files/usr/bin/bash
-# =============================================================================
-# ADAPTER SUPPORT: display_common.sh
-# -----------------------------------------------------------------------------
-# display_x11.sh / display_wayland.sh 공유 로직
-#
-# 두 어댑터는 세션 종료(kill) 로직(_kill_pidfile / _kill_orphans /
-# _kill_display_session)이 거의 동일하며, 유일한 차이는 _kill_display_session이
-# _kill_orphans에 추가로 넘기는 컴포지터 프로세스명(x11=없음, wayland=labwc)과
-# 그를 설명하는 주석 한 줄뿐이다.
-#
-# display_emit_kill_session()은 install.sh가 아니라 script_builder가 호출해
-# 그 stdout(FRAG 텍스트)을 그대로 생성 스크립트(startXFCE 등)에 이어 붙인다.
-# 여기서도 최종적으로 "완성된 셸 코드 텍스트"를 stdout에 내야 하므로, 원본과
-# 동일한 quoted heredoc으로 텍스트를 만들고 컴포지터 차이만 플레이스홀더
-# 치환으로 반영한다(함수를 실제로 정의하거나 eval하지 않는다).
-# =============================================================================
+# Shared session state used by the generated start and stop commands.
 
-# display_common_emit_kill_session <extra_orphan_names> [cmdline_matched_names]
-#   _kill_pidfile/_kill_orphans/_kill_display_session 함수 정의 텍스트를 출력한다.
-#   $1: _kill_orphans에 추가로 넘길 프로세스명(공백 구분, 없으면 "") — pkill -x 대상
-#   $2: comm이 15자로 잘리거나 절대경로로 실행돼 -x로는 잡히지 않는 프로세스명 —
-#       pkill -f 대상(공백 구분, 없으면 "")
 display_common_emit_kill_session() {
-    local extra="${1:-}"
-    local cmdline="${2:-}"
-    local frag
-    frag=$(cat << 'FRAG'
-_kill_pidfile() {
-    local file="$1" pid expected cmdline
-    [ -r "$file" ] || return 0
-    read -r pid expected < "$file" || true
-    case "$pid" in ""|*[!0-9]*) rm -f "$file"; return 0 ;; esac
-    if [ -n "$expected" ]; then
-        [ -r "/proc/$pid/cmdline" ] || { rm -f "$file"; return 0; }
-        cmdline=$(tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null || true)
-        case "$cmdline" in *"$expected"*) ;; *) rm -f "$file"; return 0 ;; esac
-    fi
-    kill "$pid" 2>/dev/null || true
-    local _w
-    for _w in 1 2 3; do
-        kill -0 "$pid" 2>/dev/null || break
-        sleep 1
-    done
-    kill -9 "$pid" 2>/dev/null || true
-    rm -f "$file"
+    cat <<'FRAG'
+_record_session_pid() {
+    local file="$1" pid="$2" expected="$3" scope="$4" stat_line
+    local -a fields
+    IFS= read -r stat_line 2>/dev/null < "/proc/$pid/stat" || return 1
+    IFS=' ' read -ra fields <<< "${stat_line##*) }"
+    [ -n "${fields[19]:-}" ] || return 1
+    printf '%s\t%s\t%s\t%s\n' "$pid" "$expected" "$scope" "${fields[19]}" > "$file"
 }
 
-# 세션 리더가 비정상 종료돼 남은 XFCE 컴포넌트 고아를 정리한다.
-# 과거 방식의 "확실한 정리"와 현재 PID 방식의 "graceful 종료"를 결합:
-# 정확한 프로세스명(-x)만 골라 SIGTERM 후 잔존분만 SIGKILL 한다.
-# (-f 부분일치를 쓰지 않으므로 이름이 다른 무관 프로세스는 건드리지 않는다.)
-_kill_orphans() {
-    local names="Xwayland xfwm4 xfdesktop xfce4-panel xfsettingsd xfconfd xfce4-power-manager xfce4-notifyd xfce4-screensaver nimf pulseaudio conky dbus-daemon dbus-launch $*"
-    # pkill's name matching is not usable for these on Android/Termux. Names over
-    # 15 bytes are rejected outright (comm is capped there, and pgrep says so:
-    # startplasma-wayland, kwin_wayland_wrapper). plasmashell is worse — its comm
-    # reads back as exactly "plasmashell" yet neither pkill -x nor a substring
-    # match finds it, while -f does. So match the command line, anchored so an
-    # unrelated process merely mentioning the name is left alone. Empty expands to
-    # zero iterations.
-    local cmdline_names="__DISPLAY_COMMON_CMDLINE_NAMES__"
-    local _n
-    for _n in $names; do pkill -TERM -x "$_n" 2>/dev/null || true; done
-    for _n in $cmdline_names; do pkill -TERM -f "(^|/)$_n( |\$)" 2>/dev/null || true; done
-    sleep 1
-    for _n in $names; do pkill -KILL -x "$_n" 2>/dev/null || true; done
-    for _n in $cmdline_names; do pkill -KILL -f "(^|/)$_n( |\$)" 2>/dev/null || true; done
+_session_pidfile_target() {
+    local file="$1" pid expected scope start stat_line arg matched=false
+    local -a fields argv
+    [ -r "$file" ] && IFS=$' \t' read -r pid expected scope start < "$file" || return 1
+    [[ "$pid" =~ ^[1-9][0-9]*$ ]] && [ "$pid" -gt 1 ] || return 1
+    IFS= read -r stat_line 2>/dev/null < "/proc/$pid/stat" || return 1
+    IFS=' ' read -ra fields <<< "${stat_line##*) }"
+    [ "${fields[0]:-}" != Z ] || return 1
+    if [ -n "$start" ]; then
+        [ "$start" = "${fields[19]:-}" ] || return 1
+        if [ "$scope" = group ] && [ "$pid" = "${fields[2]:-}" ] && [ "$pid" = "${fields[3]:-}" ]; then
+            printf '%s\n' "-$pid"
+            return 0
+        fi
+    else
+        # Previous releases wrote a PID and a command name.
+        [ -n "$expected" ] || return 1
+        mapfile -d '' -t argv 2>/dev/null < "/proc/$pid/cmdline" || return 1
+        for arg in "${argv[@]}"; do
+            case "${arg##*/}" in "$expected"|"$expected "*) matched=true; break ;; esac
+        done
+        [ "$matched" = true ] || return 1
+    fi
+    printf '%s\n' "$pid"
+}
+
+_kill_pidfile() {
+    local file="$1" target retry
+    if target=$(_session_pidfile_target "$file"); then
+        kill -TERM -- "$target" 2>/dev/null || true
+        for retry in 1 2 3; do
+            kill -0 -- "$target" 2>/dev/null || break
+            sleep 1
+        done
+        if kill -0 -- "$target" 2>/dev/null &&
+           { [[ "$target" == -* ]] || [ "$(_session_pidfile_target "$file")" = "$target" ]; }; then
+            kill -KILL -- "$target" 2>/dev/null || true
+        fi
+    fi
+    rm -f -- "$file"
+}
+
+_release_session_wake_lock() {
+    if [ -f "$SESSION_STATE_DIR/wake-lock" ]; then
+        termux-wake-unlock 2>/dev/null || true
+        rm -f -- "$SESSION_STATE_DIR/wake-lock"
+    fi
 }
 
 _kill_display_session() {
-    _kill_pidfile "$SESSION_STATE_DIR/clipboard.pid"
-    # Stop the Anland supervisor first so it can reap its own children. These
-    # pidfiles are absent for X11 sessions and safe when switching display mode.
-    _kill_pidfile "$SESSION_STATE_DIR/anland-worker.pid"
-    _kill_pidfile "$SESSION_STATE_DIR/session.pid"
-    _kill_pidfile "$SESSION_STATE_DIR/compositor.pid"
-    _kill_pidfile "$SESSION_STATE_DIR/bridge.pid"
-    _kill_pidfile "$SESSION_STATE_DIR/wireplumber.pid"
-    _kill_pidfile "$SESSION_STATE_DIR/pipewire.pid"
-    _kill_pidfile "$SESSION_STATE_DIR/display.pid"
+    local file display_num socket_id lock_id socket lock
+    # The Anland worker has an EXIT handler that reaps its children.
+    for file in clipboard anland-worker session compositor bridge wireplumber pipewire display; do
+        _kill_pidfile "$SESSION_STATE_DIR/$file.pid"
+    done
 
-    # 구버전 런처로 시작해 PID 파일이 없는 세션만 제한적으로 정리한다.
-    pkill -x xfce4-session 2>/dev/null || true
-    pkill -f '(^|/)termux-x11( |$)' 2>/dev/null || true
-    am force-stop com.termux.x11 2>/dev/null || true
-
-    # 세션 리더 사망 후 남을 수 있는 컴포넌트 고아를 정리 (graceful → SIGKILL)
-__DISPLAY_COMMON_EXTRA_COMMENT_LINE__
-    _kill_orphans __DISPLAY_COMMON_EXTRA_ORPHANS__
-
-    local display_num=""
-    [ -r "$SESSION_STATE_DIR/display-num" ] && read -r display_num < "$SESSION_STATE_DIR/display-num"
-    case "$display_num" in
-        ""|*[!0-9]*) ;;
-        *) rm -f "${TMPDIR}/.X11-unix/X${display_num}" \
-              "${TMPDIR}/.X${display_num}-lock" 2>/dev/null || true ;;
-    esac
-    rm -f "$SESSION_STATE_DIR/display-num"
-    termux-wake-unlock 2>/dev/null || true
+    if [ -r "$SESSION_STATE_DIR/display-num" ] &&
+       read -r display_num socket_id lock_id < "$SESSION_STATE_DIR/display-num" &&
+       [[ "$display_num" =~ ^[0-9]+$ ]]; then
+        socket="$TMPDIR/.X11-unix/X$display_num"
+        lock="$TMPDIR/.X$display_num-lock"
+        if [ -n "$socket_id" ] && [ "$(stat -c '%d:%i' "$socket" 2>/dev/null)" = "$socket_id" ]; then
+            rm -f -- "$socket"
+        fi
+        if [ -n "$lock_id" ] && [ "$(stat -c '%d:%i' "$lock" 2>/dev/null)" = "$lock_id" ]; then
+            rm -f -- "$lock"
+        fi
+    fi
+    rm -f -- "$SESSION_STATE_DIR/display-num" "$SESSION_STATE_DIR/anland-ready"
+    _release_session_wake_lock
 }
 FRAG
-)
-    if [ -n "$extra" ]; then
-        # wayland처럼 추가 프로세스명이 있으면 그 이유를 설명하는 주석 한 줄을 남긴다
-        # (원본 display_wayland.sh의 "# labwc(컴포지터)도 고아 목록에 포함한다." 재현)
-        frag="${frag/__DISPLAY_COMMON_EXTRA_COMMENT_LINE__/    # ${extra}(컴포지터)도 고아 목록에 포함한다.}"
-    else
-        # x11처럼 추가분이 없으면 마커 줄 자체(와 개행)를 통째로 제거한다
-        frag="${frag/$'__DISPLAY_COMMON_EXTRA_COMMENT_LINE__\n'/}"
-    fi
-    frag="${frag/__DISPLAY_COMMON_CMDLINE_NAMES__/$cmdline}"
-    printf '%s\n' "${frag/ __DISPLAY_COMMON_EXTRA_ORPHANS__/${extra:+ $extra}}"
 }

@@ -87,12 +87,13 @@ _config_fixture() {
     mkdir -p "$HOME/.config/termux-xfce"
     STABILITY_CONFIG="$HOME/.config/termux-xfce/config"
     printf 'PROOT_DISTRO="ubuntu"\nPROOT_USER="alice"\nDISPLAY_SERVER="x11"\nPROOT_SHELL="zsh"\nPRUN_RUNTIME="chroot-ng"\n' > "$STABILITY_CONFIG"
-    awk '/^_cfg_file=/ { active=1 } active && /^# 11\./ { exit } active { print }' \
+    awk '/^_cfg_file=/ { active=1 } active { print } /^unset _cfg_target _cfg_staged$/ { exit }' \
         "$_STABILITY_ROOT/install.sh" > "$STABILITY_SB/config.sh"
     export SKIP_PROOT=true DISPLAY_SERVER=x11 ARCH=aarch64
     unset PROOT_SHELL
     ui_warn() { :; }
-    export -f ui_warn
+    _bind_existing_proot_launchers() { :; }
+    export -f ui_warn _bind_existing_proot_launchers
 }
 
 _test_config_write_failure_preserves_original() {
